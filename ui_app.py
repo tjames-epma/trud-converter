@@ -59,7 +59,6 @@ def get_gtin_mapping(zip_obj):
         for ampp_block in root.findall(".//{*}AMPP"):
             amppid_elem = ampp_block.find("{*}AMPPID")
             amppid = amppid_elem.text if amppid_elem is not None else None
-            # FIX: Ensure this loop is fully intact
             for gtin_data in ampp_block.findall(".//{*}GTINDATA"):
                 gtin_elem = gtin_data.find("{*}GTIN")
                 if gtin_elem is not None and amppid:
@@ -73,9 +72,9 @@ with st.sidebar:
     st.info("Mapping TRUD AMPP records (NM) to GTINs.")
     st.divider()
     st.subheader("🔍 Quick Drug Search")
-    lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a name (e.g. 'Aspirin') and press Enter after processing.")
+    lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a name and press Enter after processing.")
     st.divider()
-    st.caption("v1.4 | Built for EPMA Data Team")
+    st.caption("v1.4.1 | Built for EPMA Data Team")
 
 st.title("💊 TRUD AMPP + GTIN Processor")
 st.markdown("---")
@@ -88,9 +87,9 @@ with col1:
 
 with col2:
     st.subheader("2. File Info")
+    week_num = "Unknown"
     if uploaded_file:
         st.write(f"**Filename:** `{uploaded_file.name}`")
-        week_num = "Unknown"
         if 'week' in uploaded_file.name.lower():
             week_num = uploaded_file.name.lower().split('-')[0].replace('week', '')
             st.warning(f"📅 **Data Week Identified:** {week_num}")
@@ -111,47 +110,4 @@ if uploaded_file is not None:
                         st.error("Could not find internal GTIN zip.")
                     else:
                         st.write("Reading GTIN file...")
-                        with outer_zip.open(gtin_zip_list[0]) as inner_data:
-                            with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
-                                df_gtin = get_gtin_mapping(inner_zip)
-
-                        # Merge Logic
-                        st.write("Merging records...")
-                        final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
-                        
-                        # Summary Metrics
-                        total_ampps = len(final_df)
-                        gtin_matches = final_df['GTIN'].notna().sum()
-                        match_rate = gtin_matches / total_ampps if total_ampps > 0 else 0
-                        
-                        # Filtered DataFrame for Export
-                        export_df = final_df.dropna(subset=['GTIN']).copy()
-                        if 'AMPPID' in export_df.columns:
-                            export_df = export_df.drop(columns=['AMPPID'])
-
-                        # Sidebar Updates
-                        with st.sidebar:
-                            st.subheader("📊 Data Quality")
-                            st.metric("Total AMPPs", f"{total_ampps:,}")
-                            st.metric("GTIN Matches", f"{gtin_matches:,}", delta=f"{match_rate:.1%}")
-                            st.progress(match_rate, text="Barcode Coverage")
-                            
-                            if lookup_query:
-                                search_res = final_df[final_df['NM'].str.contains(lookup_query, case=False, na=False)]
-                                if not search_res.empty:
-                                    st.success(f"Found {len(search_res)} match(es):")
-                                    for _, row in search_res.head(5).iterrows():
-                                        gtin_val = row['GTIN'] if pd.notna(row['GTIN']) else "None"
-                                        st.write(f"**{row['NM']}**")
-                                        st.code(f"GTIN: {gtin_val}")
-                                else:
-                                    st.error(f"No match for '{lookup_query}'")
-
-                        # Create the Excel Table for Power Query
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            sheet_name = 'GTIN_Data'
-                            export_df.to_excel(writer, index=False, sheet_name=sheet_name)
-                            worksheet = writer.sheets[sheet_name]
-                            num_rows, num_cols = export_df.shape
-                            last_col = get_column_letter(num_cols
+                        with outer_zip.open(gtin_zip_list[0]) as
