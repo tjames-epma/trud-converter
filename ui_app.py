@@ -74,47 +74,6 @@ with st.sidebar:
     st.subheader("🔍 Quick Drug Search")
     lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a name and press Enter after processing.")
     st.divider()
-    st.caption("v1.4.3 | Built for EPMA Data Team")
+    st.caption("v1.4.4 | Built for EPMA Data Team")
 
-st.title("💊 TRUD AMPP + GTIN Processor")
-st.markdown("---")
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader("1. Data Upload")
-    uploaded_file = st.file_uploader("Upload the main TRUD ZIP file", type="zip")
-
-with col2:
-    st.subheader("2. File Info")
-    week_num = "Unknown"
-    if uploaded_file:
-        st.write(f"**Filename:** `{uploaded_file.name}`")
-        if 'week' in uploaded_file.name.lower():
-            week_num = uploaded_file.name.lower().split('-')[0].replace('week', '')
-            st.warning(f"📅 **Data Week Identified:** {week_num}")
-    else:
-        st.write("Awaiting file...")
-
-if uploaded_file is not None:
-    if st.button("🚀 Process Data & Create Table", use_container_width=True):
-        with st.status("Processing XML Layers...", expanded=True) as status:
-            try:
-                with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                    st.write("Reading AMPP file...")
-                    df_ampp = get_ampp_data(outer_zip, 'f_ampp2')
-                    
-                    # FIXED LINE 107: Added missing parentheses and closed the bracket
-                    gtin_zip_list = [f for f in outer_zip.namelist() if 'gtin' in f.lower()]
-                    
-                    if not gtin_zip_list:
-                        st.error("Could not find internal GTIN zip.")
-                    else:
-                        st.write("Reading GTIN file...")
-                        with outer_zip.open(gtin_zip_list[0]) as inner_data:
-                            with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
-                                df_gtin = get_gtin_mapping(inner_zip)
-
-                        # Merge Logic
-                        st.write("Merging records...")
-                        final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
+st.title
