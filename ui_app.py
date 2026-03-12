@@ -45,6 +45,7 @@ def get_ampp_data(zip_obj, file_pattern):
         root = tree.getroot()
         rows = []
         for record in root.findall(".//{*}AMPP"):
+            # Extracts all child tags into a dictionary
             entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
             rows.append(entry)
         return pd.DataFrame(rows)
@@ -67,114 +68,20 @@ def get_gtin_mapping(zip_obj):
 
 # --- 4. USER INTERFACE ---
 
-# Sidebar Prettification
 with st.sidebar:
     st.title("Settings & Info")
-    # st.image("logo.png", width=150) # Uncomment this if you upload logo.png to GitHub
-    st.info("Mapping TRUD AMPP records to GTINs.")
+    # st.image("logo.png", width=150) 
+    st.info("Mapping TRUD AMPP records (NM) to GTINs.")
     
-    # Feature 3: Quick GTIN Lookup (Initial UI)
+    # Feature 3: Drug Name Search
     st.divider()
-    st.subheader("🔍 Quick GTIN Lookup")
-    lookup_id = st.text_input("Enter APPID/AMPPID to find GTIN", help="Search the memory for a specific ID barcode.")
+    st.subheader("🔍 Quick Drug Search")
+    lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a drug name (e.g. 'Aspirin') and press Enter.")
     
     st.divider()
-    st.caption("v1.3 | Built for EPMA Data Team")
+    st.caption("v1.4 | Built for EPMA Data Team")
 
 st.title("💊 TRUD AMPP + GTIN Processor")
 st.markdown("---")
 
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader("1. Data Upload")
-    uploaded_file = st.file_uploader("Upload the main TRUD ZIP file", type="zip")
-
-with col2:
-    st.subheader("2. Summary")
-    if uploaded_file:
-        st.write(f"**Filename:** `{uploaded_file.name}`")
-        
-        # Feature 2: Date Tracking
-        if 'week' in uploaded_file.name.lower():
-            # Parses 'week112026' to display '11-2026'
-            week_num = uploaded_file.name.lower().split('-')[0].replace('week', '')
-            st.warning(f"📅 **Data Week Identified:** {week_num}")
-    else:
-        st.write("Awaiting file...")
-
-if uploaded_file is not None:
-    if st.button("🚀 Process Data & Create Table", use_container_width=True):
-        with st.status("Processing Layers...", expanded=True) as status:
-            try:
-                with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                    st.write("Reading AMPP file...")
-                    df_ampp = get_ampp_data(outer_zip, 'f_ampp2')
-                    
-                    gtin_zip_list = [f for f in outer_zip.namelist() if 'gtin' in f.lower()]
-                    
-                    if not gtin_zip_list:
-                        st.error("Could not find internal GTIN zip.")
-                    else:
-                        st.write("Reading GTIN file...")
-                        with outer_zip.open(gtin_zip_list[0]) as inner_data:
-                            with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
-                                df_gtin = get_gtin_mapping(inner_zip)
-
-                        # Merge Logic
-                        st.write("Merging records...")
-                        final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
-                        
-                        # Feature 1: Summary Metrics
-                        total_ampps = len(final_df)
-                        gtin_matches = final_df['GTIN'].notna().sum()
-                        match_rate = gtin_matches / total_ampps if total_ampps > 0 else 0
-                        
-                        # Filtered DataFrame for Export
-                        export_df = final_df.dropna(subset=['GTIN']).copy()
-                        if 'AMPPID' in export_df.columns:
-                            export_df = export_df.drop(columns=['AMPPID'])
-
-                        # Sidebar Updates (Metrics and Lookup Result)
-                        with st.sidebar:
-                            st.subheader("📊 Data Quality")
-                            st.metric("Total AMPPs", f"{total_ampps:,}")
-                            st.metric("GTIN Matches", f"{gtin_matches:,}", delta=f"{match_rate:.1%}")
-                            st.progress(match_rate, text="Barcode Coverage")
-                            
-                            if lookup_id:
-                                # Look for the ID in the master merge
-                                search_res = final_df[final_df['APPID'] == lookup_id]
-                                if not search_res.empty and pd.notna(search_res.iloc[0]['GTIN']):
-                                    st.success(f"**GTIN:** {search_res.iloc[0]['GTIN']}")
-                                else:
-                                    st.error("GTIN not found for this ID.")
-
-                        # Create the Excel Table for Power Query
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            sheet_name = 'GTIN_Data'
-                            export_df.to_excel(writer, index=False, sheet_name=sheet_name)
-                            worksheet = writer.sheets[sheet_name]
-                            num_rows, num_cols = export_df.shape
-                            last_col = get_column_letter(num_cols)
-                            
-                            # Create Official Excel Table
-                            tab = Table(displayName="TRUD_Data_Table", ref=f"A1:{last_col}{num_rows + 1}")
-                            style = TableStyleInfo(name="TableStyleLight9", showRowStripes=True)
-                            tab.tableStyleInfo = style
-                            worksheet.add_table(tab)
-                            
-                            for i, col in enumerate(export_df.columns):
-                                worksheet.column_dimensions[get_column_letter(i+1)].width = 20
-
-                        processed_data = output.getvalue()
-                        status.update(label="Conversion Complete!", state="complete", expanded=False)
-                        st.balloons()
-                        st.download_button(
-                            label="📥 Download Power Query Ready Excel",
-                            data=processed_data,
-                            file_name=f"TRUD_GTIN_Export_{week_num}.xlsx" if 'week_num' in locals() else "TRUD_GTIN_Export.xlsx"
-                        )
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+col1, col2 = st.columns([2,
