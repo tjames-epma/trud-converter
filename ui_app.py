@@ -4,6 +4,38 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import io
 
+import streamlit as st
+
+def check_password():
+    """Returns True if the user had the correct password."""
+    if "password" not in st.secrets["auth"]:
+        st.error("Password not set in Streamlit Secrets.")
+        return False
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["auth"]["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error.
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        # Password correct.
+        return True
+
+if not check_password():
+    st.stop()  # Stop the rest of the app from running
+
 # --- LOGIC FUNCTIONS (The ones we perfected) ---
 
 def get_ampp_data(zip_obj, file_pattern):
@@ -88,4 +120,5 @@ if uploaded_file is not None:
                         )
 
             except Exception as e:
+
                 st.error(f"An error occurred: {e}")
