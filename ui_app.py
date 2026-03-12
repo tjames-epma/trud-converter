@@ -4,29 +4,32 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import io
 
-import streamlit as st
+# 1. MUST BE FIRST: Page Configuration
+st.set_page_config(page_title="TRUD XML Converter", page_icon="💊")
 
+# --- 2. PASSWORD GATEKEEPER ---
 def check_password():
     """Returns True if the user had the correct password."""
-    if "password" not in st.secrets["auth"]:
-        st.error("Password not set in Streamlit Secrets.")
+    # Check if secrets are configured at all
+    if "auth" not in st.secrets:
+        st.error("Secrets not configured. Please add [auth] section to Streamlit Secrets.")
         return False
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == st.secrets["auth"]["password"]:
+        if st.session_state["password_input"] == st.secrets["auth"]["password"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password_input"]  # don't store password
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
         # First run, show input for password.
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
         return False
     elif not st.session_state["password_correct"]:
         # Password incorrect, show input + error.
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
         st.error("😕 Password incorrect")
         return False
     else:
@@ -34,9 +37,9 @@ def check_password():
         return True
 
 if not check_password():
-    st.stop()  # Stop the rest of the app from running
+    st.stop()
 
-# --- LOGIC FUNCTIONS (The ones we perfected) ---
+# --- 3. LOGIC FUNCTIONS ---
 
 def get_ampp_data(zip_obj, file_pattern):
     matches = [f for f in zip_obj.namelist() if file_pattern in f.lower() and f.endswith('.xml')]
@@ -58,16 +61,16 @@ def get_gtin_mapping(zip_obj):
         root = tree.getroot()
         rows = []
         for ampp_block in root.findall(".//{*}AMPP"):
-            amppid = (ampp_block.find("{*}AMPPID")).text if ampp_block.find("{*}AMPPID") is not None else None
+            amppid_elem = ampp_block.find("{*}AMPPID")
+            amppid = amppid_elem.text if amppid_elem is not None else None
             for gtin_data in ampp_block.findall(".//{*}GTINDATA"):
                 gtin_elem = gtin_data.find("{*}GTIN")
                 if gtin_elem is not None and amppid:
                     rows.append({'AMPPID': amppid, 'GTIN': gtin_elem.text})
         return pd.DataFrame(rows)
 
-# --- USER INTERFACE ---
+# --- 4. USER INTERFACE (ONLY RUNS IF PASSWORD CORRECT) ---
 
-st.set_page_config(page_title="TRUD XML Converter", page_icon="💊")
 st.title("💊 TRUD AMPP + GTIN Converter")
 st.write("Drag and drop your main TRUD ZIP file below to extract and merge records.")
 
@@ -79,9 +82,7 @@ if uploaded_file is not None:
     if st.button("🚀 Process and Merge Data"):
         with st.status("Processing data...", expanded=True) as status:
             try:
-                # Read the uploaded file into memory
                 with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                    
                     st.write("Extracting main AMPP data...")
                     df_ampp = get_ampp_data(outer_zip, 'f_ampp2')
                     
@@ -110,7 +111,6 @@ if uploaded_file is not None:
                         processed_data = output.getvalue()
 
                         status.update(label="Conversion Complete!", state="complete", expanded=False)
-                        
                         st.balloons()
                         st.download_button(
                             label="📥 Download Filtered Excel File",
@@ -118,7 +118,5 @@ if uploaded_file is not None:
                             file_name="TRUD_AMPP_GTIN_Export.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
-
             except Exception as e:
-
                 st.error(f"An error occurred: {e}")
