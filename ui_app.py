@@ -74,7 +74,7 @@ with st.sidebar:
     st.subheader("🔍 Quick Drug Search")
     lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a name and press Enter after processing.")
     st.divider()
-    st.caption("v1.4.1 | Built for EPMA Data Team")
+    st.caption("v1.4.2 | Built for EPMA Data Team")
 
 st.title("💊 TRUD AMPP + GTIN Processor")
 st.markdown("---")
@@ -104,10 +104,4 @@ if uploaded_file is not None:
                     st.write("Reading AMPP file...")
                     df_ampp = get_ampp_data(outer_zip, 'f_ampp2')
                     
-                    gtin_zip_list = [f for f in outer_zip.namelist() if 'gtin' in f.lower()]
-                    
-                    if not gtin_zip_list:
-                        st.error("Could not find internal GTIN zip.")
-                    else:
-                        st.write("Reading GTIN file...")
-                        with outer_zip.open(gtin_zip_list[0]) as
+                    gtin_zip_list = [f for f in outer_zip.namelist
