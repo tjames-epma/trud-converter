@@ -45,7 +45,6 @@ def get_ampp_data(zip_obj, file_pattern):
         root = tree.getroot()
         rows = []
         for record in root.findall(".//{*}AMPP"):
-            # Extracts all child tags into a dictionary
             entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
             rows.append(entry)
         return pd.DataFrame(rows)
@@ -60,28 +59,4 @@ def get_gtin_mapping(zip_obj):
         for ampp_block in root.findall(".//{*}AMPP"):
             amppid_elem = ampp_block.find("{*}AMPPID")
             amppid = amppid_elem.text if amppid_elem is not None else None
-            for gtin_data in ampp_block.findall(".//{*}GTINDATA"):
-                gtin_elem = gtin_data.find("{*}GTIN")
-                if gtin_elem is not None and amppid:
-                    rows.append({'AMPPID': amppid, 'GTIN': gtin_elem.text})
-        return pd.DataFrame(rows)
-
-# --- 4. USER INTERFACE ---
-
-with st.sidebar:
-    st.title("Settings & Info")
-    # st.image("logo.png", width=150) 
-    st.info("Mapping TRUD AMPP records (NM) to GTINs.")
-    
-    # Feature 3: Drug Name Search
-    st.divider()
-    st.subheader("🔍 Quick Drug Search")
-    lookup_query = st.text_input("Search Drug Name (NM)", help="Type part of a drug name (e.g. 'Aspirin') and press Enter.")
-    
-    st.divider()
-    st.caption("v1.4 | Built for EPMA Data Team")
-
-st.title("💊 TRUD AMPP + GTIN Processor")
-st.markdown("---")
-
-col1, col2 = st.columns([2,
+            for gtin_
