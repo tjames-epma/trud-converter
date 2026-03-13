@@ -3,6 +3,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
+import re  # Needed for smart date extraction
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
@@ -67,19 +68,14 @@ def get_gtin_mapping(zip_obj):
 
 # --- 4. USER INTERFACE ---
 
-# Sidebar Prettification
 with st.sidebar:
     st.title("Settings & Info")
-    # st.image("logo.png", width=150) # Uncomment this if you upload logo.png to GitHub
     st.info("Mapping TRUD AMPP records to GTINs.")
-    
-    # Feature 3: Quick GTIN Lookup (Initial UI)
     st.divider()
     st.subheader("🔍 Quick GTIN Lookup")
     lookup_id = st.text_input("Enter APPID/AMPPID to find GTIN", help="Search the memory for a specific ID barcode.")
-    
     st.divider()
-    st.caption("v1.3 | Built for EPMA Data Team")
+    st.caption("v1.5 | Built for EPMA Data Team")
 
 st.title("💊 TRUD AMPP + GTIN Processor")
 st.markdown("---")
@@ -92,12 +88,22 @@ with col1:
 
 with col2:
     st.subheader("2. Summary")
+    # Initialize week_num with a fallback
+    week_num = "Processed" 
+    
     if uploaded_file:
         st.write(f"**Filename:** `{uploaded_file.name}`")
         
-        # Feature 2: Date Tracking
-        if 'week' in uploaded_file.name.lower():
-            # Parses 'week112026' to display '11-2026'
+        # Check for the specific DM+D filename format
+        if uploaded_file.name.lower().startswith("nhsbsa_dmd_1"):
+            # Regex extracts the 8 digits (YYYYMMDD) that follow an underscore
+            date_match = re.search(r'_(\d{8})', uploaded_file.name)
+            if date_match:
+                week_num = date_match.group(1)
+                st.warning(f"📅 **Data Date Identified:** {week_num}")
+            else:
+                st.info("📂 Valid dm+d format, but date extraction failed.")
+        elif 'week' in uploaded_file.name.lower():
             week_num = uploaded_file.name.lower().split('-')[0].replace('week', '')
             st.warning(f"📅 **Data Week Identified:** {week_num}")
     else:
@@ -125,17 +131,15 @@ if uploaded_file is not None:
                         st.write("Merging records...")
                         final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
                         
-                        # Feature 1: Summary Metrics
                         total_ampps = len(final_df)
                         gtin_matches = final_df['GTIN'].notna().sum()
                         match_rate = gtin_matches / total_ampps if total_ampps > 0 else 0
                         
-                        # Filtered DataFrame for Export
                         export_df = final_df.dropna(subset=['GTIN']).copy()
                         if 'AMPPID' in export_df.columns:
                             export_df = export_df.drop(columns=['AMPPID'])
 
-                        # Sidebar Updates (Metrics and Lookup Result)
+                        # Sidebar Metrics
                         with st.sidebar:
                             st.subheader("📊 Data Quality")
                             st.metric("Total AMPPs", f"{total_ampps:,}")
@@ -143,14 +147,13 @@ if uploaded_file is not None:
                             st.progress(match_rate, text="Barcode Coverage")
                             
                             if lookup_id:
-                                # Look for the ID in the master merge
                                 search_res = final_df[final_df['APPID'] == lookup_id]
                                 if not search_res.empty and pd.notna(search_res.iloc[0]['GTIN']):
                                     st.success(f"**GTIN:** {search_res.iloc[0]['GTIN']}")
                                 else:
                                     st.error("GTIN not found for this ID.")
 
-                        # Create the Excel Table for Power Query
+                        # Excel Table Generation
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             sheet_name = 'GTIN_Data'
@@ -159,7 +162,6 @@ if uploaded_file is not None:
                             num_rows, num_cols = export_df.shape
                             last_col = get_column_letter(num_cols)
                             
-                            # Create Official Excel Table
                             tab = Table(displayName="TRUD_Data_Table", ref=f"A1:{last_col}{num_rows + 1}")
                             style = TableStyleInfo(name="TableStyleLight9", showRowStripes=True)
                             tab.tableStyleInfo = style
@@ -174,7 +176,7 @@ if uploaded_file is not None:
                         st.download_button(
                             label="📥 Download Power Query Ready Excel",
                             data=processed_data,
-                            file_name=f"TRUD_GTIN_Export_{week_num}.xlsx" if 'week_num' in locals() else "TRUD_GTIN_Export.xlsx"
+                            file_name=f"TRUD_GTIN_Export_{week_num}.xlsx"
                         )
             except Exception as e:
                 st.error(f"An error occurred: {e}")
