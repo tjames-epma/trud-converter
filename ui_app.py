@@ -32,7 +32,6 @@ if not check_password():
 # --- 3. LOGIC FUNCTIONS ---
 
 def xml_to_excel_buffer(element_list, sheet_name):
-    """Converts a list of XML elements to an Excel file buffer."""
     rows = []
     for record in element_list:
         entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
@@ -45,31 +44,32 @@ def xml_to_excel_buffer(element_list, sheet_name):
     return output.getvalue()
 
 def process_complex_xml(xml_content, zip_out, base_name):
-    """Splits one XML into multiple Excel files based on child record tags."""
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
-        # Get unique tags at the first level
         tags_found = set([child.tag for child in root])
+        files_created = 0
         for tag in tags_found:
             clean_tag = tag.split('}')[-1]
             records = root.findall(f".//{tag}")
             if records:
                 xlsx_data = xml_to_excel_buffer(records, clean_tag)
                 if xlsx_data:
-                    # Strip path and extension for naming
                     fn = base_name.split('/')[-1].replace('.xml', '')
                     new_filename = f"{fn}_{clean_tag}.xlsx"
                     zip_out.writestr(new_filename, xlsx_data)
-        return True
-    except: return False
+                    files_created += 1
+        return files_created
+    except: return 0
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("Settings & Info")
-    lookup_id = st.text_input("🔍 Quick GTIN Lookup (APPID)")
+    st.info("v2.8 | Live Search Enabled")
     st.divider()
-    st.caption("v2.6 | Deep Scan Build")
+    # Placeholder for the dynamic search which appears after processing
+    search_placeholder = st.empty()
+    preview_placeholder = st.empty()
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -77,7 +77,6 @@ st.title("💊 TRUD Data Toolkit")
 uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
 
 if uploaded_file:
-    # Identify the date from the main zip name
     date_match = re.search(r'_(\d{8})', uploaded_file.name)
     file_date = date_match.group(1) if date_match else "Processed"
 
@@ -86,28 +85,20 @@ if uploaded_file:
     if mode == "📦 Bulk Multi-File (Legacy)":
         st.subheader("Filter Exports")
         options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        
         if 'sel_all' not in st.session_state: st.session_state.sel_all = True
-        
-        # Toggle functionality
         if st.button("Toggle Select All/None"): 
             st.session_state.sel_all = not st.session_state.sel_all
             st.rerun()
-            
-        selected_files = st.multiselect("Select components to convert:", options, 
-                                       default=options if st.session_state.sel_all else [])
+        selected_files = st.multiselect("Select components:", options, default=options if st.session_state.sel_all else [])
 
     if st.button("🚀 Run Processor", use_container_width=True):
         try:
             with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
                 all_names = outer_zip.namelist()
                 
-                # --- MODE: GTIN MAPPER ---
                 if mode == "🔗 GTIN Mapper":
                     with st.status("Mapping Barcodes...", expanded=True):
-                        # Search for f_ampp2 using a flexible pattern
                         ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
-                        
                         tree = ET.parse(outer_zip.open(ampp_file))
                         root = tree.getroot()
                         ampp_rows = []
@@ -115,10 +106,8 @@ if uploaded_file:
                             entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
                             if entry: ampp_rows.append(entry)
                         df_ampp = pd.DataFrame(ampp_rows)
-                        
                         id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
                         
-                        # Find GTIN Zip
                         gtin_zip_name = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
                         with outer_zip.open(gtin_zip_name) as inner_data:
                             with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
@@ -140,6 +129,10 @@ if uploaded_file:
 
                         final_df = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
                         if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
+                        
+                        # Store in session state for search functionality
+                        st.session_state['mapped_df'] = final_df
+                        st.session_state['id_col'] = id_col
 
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -148,23 +141,17 @@ if uploaded_file:
                         st.success(f"Matched {len(final_df):,} barcodes!")
                         st.download_button("📥 Download Mapping", output.getvalue(), f"TRUD_GTIN_{file_date}.xlsx")
 
-                # --- MODE: LEGACY BULK ---
-                else:
+                else: # --- BULK LEGACY MODE ---
                     with st.status("Deep Scanning Zip Contents...", expanded=True):
                         bulk_zip_buffer = io.BytesIO()
-                        processed_count = 0
-                        
-                        with zipfile.ZipFile(bulk_zip_buffer, "w") as zip_out:
+                        total_xlsx_count = 0
+                        with zipfile.ZipFile(bulk_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
                             for filename in all_names:
                                 fn_lower = filename.lower()
-                                
-                                # Check for XML match
                                 if any(f"f_{opt}" in fn_lower for opt in selected_files) and fn_lower.endswith('.xml'):
                                     st.write(f"📂 Splitting: `{filename}`")
-                                    process_complex_xml(outer_zip.open(filename), zip_out, filename)
-                                    processed_count += 1
-                                
-                                # Check for nested ZIP match (e.g., GTIN.zip)
+                                    count = process_complex_xml(outer_zip.open(filename), zip_out, filename)
+                                    total_xlsx_count += count
                                 elif fn_lower.endswith('.zip') and any(opt in fn_lower for opt in selected_files):
                                     st.write(f"📦 Opening sub-zip: `{filename}`")
                                     with outer_zip.open(filename) as nested_data:
@@ -172,14 +159,34 @@ if uploaded_file:
                                             for inner_name in inner_zip.namelist():
                                                 if inner_name.endswith('.xml'):
                                                     with inner_zip.open(inner_name) as current_xml:
-                                                        process_complex_xml(current_xml, zip_out, inner_name)
-                                                        processed_count += 1
+                                                        count = process_complex_xml(current_xml, zip_out, inner_name)
+                                                        total_xlsx_count += count
                         
-                        if processed_count == 0:
-                            st.error("No files found matching your selection.")
-                        else:
-                            st.success(f"Success! Created {processed_count} sub-files.")
-                            st.download_button("📥 Download Legacy Zip", bulk_zip_buffer.getvalue(), f"Legacy_Export_{file_date}.zip")
+                        final_zip_data = bulk_zip_buffer.getvalue()
+                        if total_xlsx_count > 0:
+                            st.success(f"Success! Created {total_xlsx_count} sub-files.")
+                            st.download_button(f"📥 Download Legacy Zip", final_zip_data, f"Legacy_Split_{file_date}.zip", "application/zip")
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
+# --- 6. DYNAMIC SIDEBAR PREVIEW LOGIC ---
+if 'mapped_df' in st.session_state and mode == "🔗 GTIN Mapper":
+    df = st.session_state['mapped_df']
+    id_col = st.session_state['id_col']
+    
+    with st.sidebar:
+        st.divider()
+        search_query = st.text_input("🔍 Search Preview (Name or ID)", key="sidebar_search")
+        
+        if search_query:
+            # Filter by Name (NM) or ID column
+            filtered_df = df[
+                df['NM'].str.contains(search_query, case=False, na=False) | 
+                df[id_col].str.contains(search_query, case=False, na=False)
+            ]
+            st.write(f"Showing {min(len(filtered_df), 10)} of {len(filtered_df)} results")
+            st.dataframe(filtered_df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
+        else:
+            st.write("Top 10 Results:")
+            st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
