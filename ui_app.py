@@ -62,17 +62,40 @@ def process_complex_xml(xml_content, zip_out, base_name):
         return files_created
     except: return 0
 
-# --- 4. SIDEBAR ---
-with st.sidebar:
-    st.title("Settings & Info")
-    st.info("v2.8 | Live Search Enabled")
-    st.divider()
-    # Placeholder for the dynamic search which appears after processing
-    search_placeholder = st.empty()
-    preview_placeholder = st.empty()
+# --- 4. SIDEBAR LOGIC ---
+def render_sidebar():
+    with st.sidebar:
+        st.title("Settings & Info")
+        st.info("v2.9 | Persistent Sidebar")
+        
+        # This only shows up if the GTIN Mapper has been run successfully
+        if 'mapped_df' in st.session_state:
+            st.divider()
+            st.subheader("🔍 Live Search Preview")
+            q = st.text_input("Search by Name or ID", key="active_search")
+            
+            df = st.session_state['mapped_df']
+            id_col = st.session_state['id_col']
+            
+            if q:
+                filtered = df[
+                    df['NM'].str.contains(q, case=False, na=False) | 
+                    df[id_col].str.contains(q, case=False, na=False)
+                ]
+                st.write(f"Results: {len(filtered)}")
+                st.dataframe(filtered[['NM', 'GTIN', id_col]].head(10), hide_index=True)
+            else:
+                st.write("Top 10 Results:")
+                st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
+        
+        st.divider()
+        st.caption("Built for EPMA Data Team")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
+
+# Render sidebar at the start
+render_sidebar()
 
 uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
 
@@ -130,7 +153,7 @@ if uploaded_file:
                         final_df = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
                         if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
                         
-                        # Store in session state for search functionality
+                        # SAVE TO SESSION STATE
                         st.session_state['mapped_df'] = final_df
                         st.session_state['id_col'] = id_col
 
@@ -140,6 +163,8 @@ if uploaded_file:
                         
                         st.success(f"Matched {len(final_df):,} barcodes!")
                         st.download_button("📥 Download Mapping", output.getvalue(), f"TRUD_GTIN_{file_date}.xlsx")
+                        # FORCE REFRESH to show the sidebar search
+                        st.rerun()
 
                 else: # --- BULK LEGACY MODE ---
                     with st.status("Deep Scanning Zip Contents...", expanded=True):
@@ -169,24 +194,3 @@ if uploaded_file:
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
-
-# --- 6. DYNAMIC SIDEBAR PREVIEW LOGIC ---
-if 'mapped_df' in st.session_state and mode == "🔗 GTIN Mapper":
-    df = st.session_state['mapped_df']
-    id_col = st.session_state['id_col']
-    
-    with st.sidebar:
-        st.divider()
-        search_query = st.text_input("🔍 Search Preview (Name or ID)", key="sidebar_search")
-        
-        if search_query:
-            # Filter by Name (NM) or ID column
-            filtered_df = df[
-                df['NM'].str.contains(search_query, case=False, na=False) | 
-                df[id_col].str.contains(search_query, case=False, na=False)
-            ]
-            st.write(f"Showing {min(len(filtered_df), 10)} of {len(filtered_df)} results")
-            st.dataframe(filtered_df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
-        else:
-            st.write("Top 10 Results:")
-            st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
