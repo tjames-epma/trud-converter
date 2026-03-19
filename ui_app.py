@@ -44,11 +44,12 @@ def xml_to_excel_buffer(element_list, sheet_name):
     return output.getvalue()
 
 def process_complex_xml(xml_content, zip_out, base_name):
+    """Splits XML into sub-files. Returns the count of files successfully added to zip_out."""
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
         tags_found = set([child.tag for child in root])
-        files_created = 0
+        local_count = 0
         for tag in tags_found:
             clean_tag = tag.split('}')[-1]
             records = root.findall(f".//{tag}")
@@ -58,17 +59,17 @@ def process_complex_xml(xml_content, zip_out, base_name):
                     fn = base_name.split('/')[-1].replace('.xml', '')
                     new_filename = f"{fn}_{clean_tag}.xlsx"
                     zip_out.writestr(new_filename, xlsx_data)
-                    files_created += 1
-        return files_created
-    except: return 0
+                    local_count += 1
+        return local_count
+    except Exception as e:
+        return 0
 
 # --- 4. SIDEBAR LOGIC ---
 def render_sidebar():
     with st.sidebar:
         st.title("Settings & Info")
-        st.info("v2.9 | Persistent Sidebar")
+        st.info("v3.0 | Production Stable")
         
-        # This only shows up if the GTIN Mapper has been run successfully
         if 'mapped_df' in st.session_state:
             st.divider()
             st.subheader("🔍 Live Search Preview")
@@ -94,7 +95,6 @@ def render_sidebar():
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
 
-# Render sidebar at the start
 render_sidebar()
 
 uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
@@ -121,6 +121,7 @@ if uploaded_file:
                 
                 if mode == "🔗 GTIN Mapper":
                     with st.status("Mapping Barcodes...", expanded=True):
+                        # Use flexible matching for f_ampp2
                         ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
                         tree = ET.parse(outer_zip.open(ampp_file))
                         root = tree.getroot()
@@ -153,7 +154,6 @@ if uploaded_file:
                         final_df = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
                         if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
                         
-                        # SAVE TO SESSION STATE
                         st.session_state['mapped_df'] = final_df
                         st.session_state['id_col'] = id_col
 
@@ -163,34 +163,44 @@ if uploaded_file:
                         
                         st.success(f"Matched {len(final_df):,} barcodes!")
                         st.download_button("📥 Download Mapping", output.getvalue(), f"TRUD_GTIN_{file_date}.xlsx")
-                        # FORCE REFRESH to show the sidebar search
                         st.rerun()
 
                 else: # --- BULK LEGACY MODE ---
-                    with st.status("Deep Scanning Zip Contents...", expanded=True):
+                    with st.status("Deep Scanning & Splitting...", expanded=True):
                         bulk_zip_buffer = io.BytesIO()
                         total_xlsx_count = 0
+                        
+                        # CRITICAL: zipfile MUST close before we call getvalue()
                         with zipfile.ZipFile(bulk_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
                             for filename in all_names:
                                 fn_lower = filename.lower()
+                                
+                                # Match standard XMLs
                                 if any(f"f_{opt}" in fn_lower for opt in selected_files) and fn_lower.endswith('.xml'):
                                     st.write(f"📂 Splitting: `{filename}`")
-                                    count = process_complex_xml(outer_zip.open(filename), zip_out, filename)
-                                    total_xlsx_count += count
+                                    with outer_zip.open(filename) as xml_f:
+                                        total_xlsx_count += process_complex_xml(xml_f, zip_out, filename)
+                                
+                                # Match nested ZIPs (GTIN/BNF)
                                 elif fn_lower.endswith('.zip') and any(opt in fn_lower for opt in selected_files):
-                                    st.write(f"📦 Opening sub-zip: `{filename}`")
+                                    st.write(f"📦 Sub-zip: `{filename}`")
                                     with outer_zip.open(filename) as nested_data:
                                         with zipfile.ZipFile(io.BytesIO(nested_data.read())) as inner_zip:
                                             for inner_name in inner_zip.namelist():
                                                 if inner_name.endswith('.xml'):
                                                     with inner_zip.open(inner_name) as current_xml:
-                                                        count = process_complex_xml(current_xml, zip_out, inner_name)
-                                                        total_xlsx_count += count
+                                                        total_xlsx_count += process_complex_xml(current_xml, zip_out, inner_name)
                         
-                        final_zip_data = bulk_zip_buffer.getvalue()
                         if total_xlsx_count > 0:
-                            st.success(f"Success! Created {total_xlsx_count} sub-files.")
-                            st.download_button(f"📥 Download Legacy Zip", final_zip_data, f"Legacy_Split_{file_date}.zip", "application/zip")
+                            st.success(f"Success! Created {total_xlsx_count} files.")
+                            st.download_button(
+                                label="📥 Download Full Legacy Zip", 
+                                data=bulk_zip_buffer.getvalue(), 
+                                file_name=f"Legacy_Split_{file_date}.zip",
+                                mime="application/zip"
+                            )
+                        else:
+                            st.error("No files found or split. Check filters.")
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
