@@ -92,7 +92,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.4 | Progress Bar Update")
+        st.caption("v4.5 | Zip Fix")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -159,12 +159,12 @@ if uploaded_file:
                         st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
                         st.session_state['count'] = len(final_df)
 
-                else: # --- BULK LEGACY MODE WITH PROGRESS BAR ---
+                else: # --- BULK LEGACY MODE ---
                     progress_bar = st.progress(0)
                     status_text = st.empty()
-                    
                     buf = io.BytesIO()
                     processed_files = 0
+                    
                     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                         xml_worklist = []
                         for f in all_names:
@@ -194,12 +194,12 @@ if uploaded_file:
                                 processed_files += 1
                             progress_bar.progress((i + 1) / total_items)
                         
-                        status_text.text("Finalizing ZIP archive...")
-                        st.session_state['zip_data'] = buf.getvalue()
-                        st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
-                        st.session_state['count'] = processed_files
-                        status_text.empty()
-                        progress_bar.empty()
+                    # CRITICAL FIX: Update session state ONLY after 'with' block is closed and ZIP is finalized
+                    st.session_state['zip_data'] = buf.getvalue()
+                    st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
+                    st.session_state['count'] = processed_files
+                    status_text.empty()
+                    progress_bar.empty()
 
             st.rerun()
         except Exception as e:
