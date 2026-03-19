@@ -32,14 +32,19 @@ if not check_password():
 # --- 3. LOGIC FUNCTIONS ---
 
 def get_legacy_sheet_name(tag, filename_lower):
-    """Maps XML tags to specific sheet names provided in user samples."""
+    """Maps XML tags to specific sheet names. Fixed mapping for CONTENT/CCONTENT."""
     tag = tag.split('}')[-1]
     
     # Specific Mapping for f_ampp
     if "f_ampp" in filename_lower:
         mapping = {
-            "AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType",
-            "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"
+            "AMPP": "AmppType", 
+            "PACK_INFO": "PackInfoType", 
+            "CONTENT": "ContentType",   # Row 55: Fixed
+            "CCONTENT": "ContentType",  # Row 56: Fixed (handling CCONTENT variation)
+            "PRESC_INFO": "PrescInfoType", 
+            "PRICE_INFO": "PriceInfoType", 
+            "REIMB_INFO": "ReimbInfoType"
         }
         return mapping.get(tag, tag)
 
@@ -60,14 +65,14 @@ def get_legacy_sheet_name(tag, filename_lower):
 
     # Specific Mapping for f_vmpp
     if "f_vmpp" in filename_lower:
-        mapping = {"VMPP": "VMPP", "DT_INFO": "DtInfo", "CONTENT": "CContent"}
+        # Row 70: Updated to handle CCONTENT -> CContent mapping
+        mapping = {"VMPP": "VMPP", "DT_INFO": "DtInfo", "CONTENT": "CContent", "CCONTENT": "CContent"}
         return mapping.get(tag, tag)
 
-    # Specific Mapping for Lookups (Remove 'InfoType' and 'Type')
+    # Specific Mapping for Lookups
     if "f_lookup" in filename_lower:
         return tag.replace("InfoType", "").replace("Type", "")
 
-    # Basics
     if "f_vtm" in filename_lower: return "VTM"
     if "f_ingredient" in filename_lower: return "Ingredient"
     if "f_gtin" in filename_lower: return "GTIN"
@@ -75,7 +80,6 @@ def get_legacy_sheet_name(tag, filename_lower):
     return tag.replace("InfoType", "").replace("Type", "")
 
 def process_legacy_xml_to_sheets(xml_content, filename_lower):
-    """Parses XML and returns a dict of {sheet_name: dataframe} matching samples."""
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
@@ -116,7 +120,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.1 | Sample-Matched Multi-Sheet")
+        st.caption("v4.3 | Fixed ContentType Mapping")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -151,7 +155,6 @@ if uploaded_file:
                 
                 if mode == "🔗 GTIN Mapper":
                     with st.status("Mapping Barcodes...", expanded=True):
-                        # Targeted GTIN Mapper Logic (Isolated/Untouched)
                         ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
                         ampp_tree = ET.parse(outer_zip.open(ampp_file))
                         ampp_rows = [{c.tag.split('}')[-1]: c.text for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
@@ -185,13 +188,12 @@ if uploaded_file:
                         st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
                         st.session_state['count'] = len(final_df)
 
-                else: # --- BULK LEGACY MODE (Multi-Sheet) ---
+                else: # --- BULK LEGACY MODE ---
                     with st.status("Generating Multi-Sheet Workbooks...", expanded=True):
                         buf = io.BytesIO()
                         processed_files = 0
                         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                             
-                            # Dictionary to group data by the base component (e.g., 'f_lookup')
                             xml_worklist = []
                             for f in all_names:
                                 fn_l = f.lower()
@@ -207,14 +209,12 @@ if uploaded_file:
                             for xml_name, xml_data in xml_worklist:
                                 sheets_dict = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
                                 if sheets_dict:
-                                    # Create single excel for this component
                                     excel_buf = io.BytesIO()
                                     with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
                                         for s_name, s_df in sheets_dict.items():
                                             s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
                                     
-                                    # Clean filename for ZIP
-                                    parts = xml_name.split('/')[-1].split('_')
+                                    parts = xml_name.split('/')[-1].split('\\')[-1].split('_')
                                     clean_fn = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else parts[0]
                                     clean_fn = re.sub(r'\d+$', '', clean_fn) + ".xlsx"
                                     
@@ -231,7 +231,7 @@ if uploaded_file:
 
     if 'zip_data' in st.session_state:
         st.divider()
-        st.success(f"✅ Success! Created {st.session_state.get('count', 0)} multi-sheet Excel workbooks.")
+        st.success(f"✅ Success! Created {st.session_state.get('count', 0)} multi-sheet workbooks.")
         st.download_button(
             label=f"📥 Download {st.session_state['file_name']}",
             data=st.session_state['zip_data'],
