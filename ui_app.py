@@ -196,4 +196,6 @@ if uploaded_file:
             label=f"📥 Download {st.session_state['file_name']}",
             data=st.session_state['zip_data'],
             file_name=st.session_state['file_name'],
-            mime="
+            mime="application/zip" if "Legacy" in mode else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
