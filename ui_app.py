@@ -32,51 +32,28 @@ if not check_password():
 # --- 3. LOGIC FUNCTIONS ---
 
 def get_legacy_sheet_name(tag, filename_lower):
-    """Maps XML tags to specific sheet names. Fixed mapping for CONTENT/CCONTENT."""
+    """Maps XML tags to specific sheet names based on user samples."""
     tag = tag.split('}')[-1]
-    
-    # Specific Mapping for f_ampp
     if "f_ampp" in filename_lower:
-        mapping = {
-            "AMPP": "AmppType", 
-            "PACK_INFO": "PackInfoType", 
-            "CONTENT": "ContentType",   # Row 55: Fixed
-            "CCONTENT": "ContentType",  # Row 56: Fixed (handling CCONTENT variation)
-            "PRESC_INFO": "PrescInfoType", 
-            "PRICE_INFO": "PriceInfoType", 
-            "REIMB_INFO": "ReimbInfoType"
-        }
+        mapping = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
+                   "CCONTENT": "ContentType", "PRESC_INFO": "PrescInfoType", 
+                   "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
         return mapping.get(tag, tag)
-
-    # Specific Mapping for f_amp
     if "f_amp" in filename_lower and not "ampp" in filename_lower:
-        mapping = {
-            "AMP": "AmpType", "API": "ApiType", "LIC_ROUTE": "LicRouteType", "APP_PROD_INFO": "AppProdInfoType"
-        }
+        mapping = {"AMP": "AmpType", "API": "ApiType", "LIC_ROUTE": "LicRouteType", "APP_PROD_INFO": "AppProdInfoType"}
         return mapping.get(tag, tag)
-
-    # Specific Mapping for f_vmp
     if "f_vmp" in filename_lower and not "vmpp" in filename_lower:
-        mapping = {
-            "VMP": "VMP", "VPI": "VPI", "ONT_DRUG_FORM": "OntDrugForm",
-            "DRUG_FORM": "DrugForm", "DRUG_ROUTE": "DrugRoute", "CONTROL_INFO": "Control"
-        }
+        mapping = {"VMP": "VMP", "VPI": "VPI", "ONT_DRUG_FORM": "OntDrugForm",
+                   "DRUG_FORM": "DrugForm", "DRUG_ROUTE": "DrugRoute", "CONTROL_INFO": "Control"}
         return mapping.get(tag, tag)
-
-    # Specific Mapping for f_vmpp
     if "f_vmpp" in filename_lower:
-        # Row 70: Updated to handle CCONTENT -> CContent mapping
         mapping = {"VMPP": "VMPP", "DT_INFO": "DtInfo", "CONTENT": "CContent", "CCONTENT": "CContent"}
         return mapping.get(tag, tag)
-
-    # Specific Mapping for Lookups
     if "f_lookup" in filename_lower:
         return tag.replace("InfoType", "").replace("Type", "")
-
     if "f_vtm" in filename_lower: return "VTM"
     if "f_ingredient" in filename_lower: return "Ingredient"
     if "f_gtin" in filename_lower: return "GTIN"
-
     return tag.replace("InfoType", "").replace("Type", "")
 
 def process_legacy_xml_to_sheets(xml_content, filename_lower):
@@ -84,22 +61,17 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         tree = ET.parse(xml_content)
         root = tree.getroot()
         data_map = {}
-        
         for elem in root.findall(".//*"):
             child_data = {child.tag.split('}')[-1]: child.text for child in elem if child.text is not None}
             if child_data:
                 raw_tag = elem.tag.split('}')[-1]
                 sheet_name = get_legacy_sheet_name(raw_tag, filename_lower)
-                
-                if sheet_name not in data_map:
-                    data_map[sheet_name] = []
+                if sheet_name not in data_map: data_map[sheet_name] = []
                 data_map[sheet_name].append(child_data)
-        
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            if len(df.columns) > 1:
-                final_sheets[sheet] = df
+            if len(df.columns) > 1: final_sheets[sheet] = df
         return final_sheets
     except: return {}
 
@@ -120,7 +92,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.3 | Fixed ContentType Mapping")
+        st.caption("v4.4 | Progress Bar Update")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -180,7 +152,6 @@ if uploaded_file:
                         if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
                         st.session_state['mapped_df'] = final_df
                         st.session_state['id_col'] = id_col
-                        
                         excel_buf = io.BytesIO()
                         with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
                             final_df.to_excel(writer, index=False)
@@ -188,43 +159,48 @@ if uploaded_file:
                         st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
                         st.session_state['count'] = len(final_df)
 
-                else: # --- BULK LEGACY MODE ---
-                    with st.status("Generating Multi-Sheet Workbooks...", expanded=True):
-                        buf = io.BytesIO()
-                        processed_files = 0
-                        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                            
-                            xml_worklist = []
-                            for f in all_names:
-                                fn_l = f.lower()
-                                if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                    xml_worklist.append((f, outer_zip.open(f)))
-                                elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
-                                    with outer_zip.open(f) as zd_inner:
-                                        with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
-                                            for iname in iz_inner.namelist():
-                                                if iname.endswith('.xml'):
-                                                    xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
+                else: # --- BULK LEGACY MODE WITH PROGRESS BAR ---
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    buf = io.BytesIO()
+                    processed_files = 0
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                        xml_worklist = []
+                        for f in all_names:
+                            fn_l = f.lower()
+                            if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
+                                xml_worklist.append((f, outer_zip.open(f)))
+                            elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
+                                with outer_zip.open(f) as zd_inner:
+                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
+                                        for iname in iz_inner.namelist():
+                                            if iname.endswith('.xml'):
+                                                xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
 
-                            for xml_name, xml_data in xml_worklist:
-                                sheets_dict = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
-                                if sheets_dict:
-                                    excel_buf = io.BytesIO()
-                                    with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
-                                        for s_name, s_df in sheets_dict.items():
-                                            s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
-                                    
-                                    parts = xml_name.split('/')[-1].split('\\')[-1].split('_')
-                                    clean_fn = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else parts[0]
-                                    clean_fn = re.sub(r'\d+$', '', clean_fn) + ".xlsx"
-                                    
-                                    zout.writestr(clean_fn, excel_buf.getvalue())
-                                    processed_files += 1
+                        total_items = len(xml_worklist)
+                        for i, (xml_name, xml_data) in enumerate(xml_worklist):
+                            status_text.text(f"Processing Component {i+1} of {total_items}: {xml_name}")
+                            sheets_dict = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
+                            if sheets_dict:
+                                excel_buf = io.BytesIO()
+                                with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
+                                    for s_name, s_df in sheets_dict.items():
+                                        s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
+                                parts = xml_name.split('/')[-1].split('\\')[-1].split('_')
+                                clean_fn = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else parts[0]
+                                clean_fn = re.sub(r'\d+$', '', clean_fn) + ".xlsx"
+                                zout.writestr(clean_fn, excel_buf.getvalue())
+                                processed_files += 1
+                            progress_bar.progress((i + 1) / total_items)
                         
-                        if processed_files > 0:
-                            st.session_state['zip_data'] = buf.getvalue()
-                            st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
-                            st.session_state['count'] = processed_files
+                        status_text.text("Finalizing ZIP archive...")
+                        st.session_state['zip_data'] = buf.getvalue()
+                        st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
+                        st.session_state['count'] = processed_files
+                        status_text.empty()
+                        progress_bar.empty()
+
             st.rerun()
         except Exception as e:
             st.error(f"❌ Error: {e}")
