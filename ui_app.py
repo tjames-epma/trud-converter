@@ -31,52 +31,73 @@ if not check_password():
 
 # --- 3. LOGIC FUNCTIONS ---
 
-def xml_to_excel_buffer(df, sheet_name):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
-    return output.getvalue()
+def get_legacy_sheet_name(tag, filename_lower):
+    """Maps XML tags to specific sheet names provided in user samples."""
+    tag = tag.split('}')[-1]
+    
+    # Specific Mapping for f_ampp
+    if "f_ampp" in filename_lower:
+        mapping = {
+            "AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType",
+            "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"
+        }
+        return mapping.get(tag, tag)
 
-def legacy_export_splitter(xml_content, zip_out, base_name):
-    """
-    MATCHES SAMPLES: Recursively finds every data container tag.
-    Affects ONLY Bulk Legacy Mode.
-    """
+    # Specific Mapping for f_amp
+    if "f_amp" in filename_lower and not "ampp" in filename_lower:
+        mapping = {
+            "AMP": "AmpType", "API": "ApiType", "LIC_ROUTE": "LicRouteType", "APP_PROD_INFO": "AppProdInfoType"
+        }
+        return mapping.get(tag, tag)
+
+    # Specific Mapping for f_vmp
+    if "f_vmp" in filename_lower and not "vmpp" in filename_lower:
+        mapping = {
+            "VMP": "VMP", "VPI": "VPI", "ONT_DRUG_FORM": "OntDrugForm",
+            "DRUG_FORM": "DrugForm", "DRUG_ROUTE": "DrugRoute", "CONTROL_INFO": "Control"
+        }
+        return mapping.get(tag, tag)
+
+    # Specific Mapping for f_vmpp
+    if "f_vmpp" in filename_lower:
+        mapping = {"VMPP": "VMPP", "DT_INFO": "DtInfo", "CONTENT": "CContent"}
+        return mapping.get(tag, tag)
+
+    # Specific Mapping for Lookups (Remove 'InfoType' and 'Type')
+    if "f_lookup" in filename_lower:
+        return tag.replace("InfoType", "").replace("Type", "")
+
+    # Basics
+    if "f_vtm" in filename_lower: return "VTM"
+    if "f_ingredient" in filename_lower: return "Ingredient"
+    if "f_gtin" in filename_lower: return "GTIN"
+
+    return tag.replace("InfoType", "").replace("Type", "")
+
+def process_legacy_xml_to_sheets(xml_content, filename_lower):
+    """Parses XML and returns a dict of {sheet_name: dataframe} matching samples."""
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
         data_map = {}
         
-        # Walk through the XML to find elements that act as record rows
         for elem in root.findall(".//*"):
-            # A record row has child tags with text, but no deeper nested tags
             child_data = {child.tag.split('}')[-1]: child.text for child in elem if child.text is not None}
-            
             if child_data:
-                tag_name = elem.tag.split('}')[-1]
-                # Match sample naming: remove 'InfoType' and 'Type'
-                clean_tag = tag_name.replace('InfoType', '').replace('Type', '')
+                raw_tag = elem.tag.split('}')[-1]
+                sheet_name = get_legacy_sheet_name(raw_tag, filename_lower)
                 
-                if clean_tag not in data_map:
-                    data_map[clean_tag] = []
-                data_map[clean_tag].append(child_data)
+                if sheet_name not in data_map:
+                    data_map[sheet_name] = []
+                data_map[sheet_name].append(child_data)
         
-        files_count = 0
-        fn_raw = base_name.split('/')[-1].split('\\')[-1].replace('.xml', '')
-        # f_lookup2_3120326 -> f_lookup
-        prefix = re.sub(r'\d+$', '', fn_raw.split('_')[0] + '_' + fn_raw.split('_')[1]) if '_' in fn_raw else fn_raw
-        
-        for tag, rows in data_map.items():
-            if rows:
-                df = pd.DataFrame(rows).drop_duplicates()
-                # Ensure we only export actual tables (more than 1 column)
-                if len(df.columns) > 1:
-                    xlsx_data = xml_to_excel_buffer(df, tag)
-                    zip_out.writestr(f"{prefix}_{tag}.xlsx", xlsx_data)
-                    files_count += 1
-        return files_count
-    except Exception:
-        return 0
+        final_sheets = {}
+        for sheet, rows in data_map.items():
+            df = pd.DataFrame(rows).drop_duplicates()
+            if len(df.columns) > 1:
+                final_sheets[sheet] = df
+        return final_sheets
+    except: return {}
 
 # --- 4. SIDEBAR LOGIC ---
 def render_sidebar():
@@ -95,7 +116,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.0 | Legacy Multi-Split Build")
+        st.caption("v4.1 | Sample-Matched Multi-Sheet")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -129,21 +150,20 @@ if uploaded_file:
                 all_names = outer_zip.namelist()
                 
                 if mode == "🔗 GTIN Mapper":
-                    with st.status("Mapping...", expanded=True):
-                        # GTIN Mapper: Proven stable logic
+                    with st.status("Mapping Barcodes...", expanded=True):
+                        # Targeted GTIN Mapper Logic (Isolated/Untouched)
                         ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
                         ampp_tree = ET.parse(outer_zip.open(ampp_file))
                         ampp_rows = [{c.tag.split('}')[-1]: c.text for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
                         df_ampp = pd.DataFrame(ampp_rows)
                         id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
                         
-                        gtin_zip_path = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                        with outer_zip.open(gtin_zip_path) as zd:
+                        gtin_zip_name = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
+                        with outer_zip.open(gtin_zip_name) as zd:
                             with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
                                 g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
-                                g_root = ET.parse(iz.open(g_xml)).getroot()
                                 g_rows = []
-                                for b in g_root.findall(".//{*}AMPP"):
+                                for b in ET.parse(iz.open(g_xml)).getroot().findall(".//{*}AMPP"):
                                     id_found = b.find(".//{*}AMPPID")
                                     if id_found is None: id_found = b.find(".//{*}APPID")
                                     if id_found is not None:
@@ -165,33 +185,53 @@ if uploaded_file:
                         st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
                         st.session_state['count'] = len(final_df)
 
-                else: # --- BULK LEGACY MODE ---
-                    with st.status("Recursive Multi-Split Processing...", expanded=True):
+                else: # --- BULK LEGACY MODE (Multi-Sheet) ---
+                    with st.status("Generating Multi-Sheet Workbooks...", expanded=True):
                         buf = io.BytesIO()
-                        total_count = 0
+                        processed_files = 0
                         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                            
+                            # Dictionary to group data by the base component (e.g., 'f_lookup')
+                            xml_worklist = []
                             for f in all_names:
                                 fn_l = f.lower()
                                 if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                    total_count += legacy_export_splitter(outer_zip.open(f), zout, f)
+                                    xml_worklist.append((f, outer_zip.open(f)))
                                 elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
                                     with outer_zip.open(f) as zd_inner:
                                         with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
                                             for iname in iz_inner.namelist():
                                                 if iname.endswith('.xml'):
-                                                    total_count += legacy_export_splitter(iz_inner.open(iname), zout, iname)
+                                                    xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
+
+                            for xml_name, xml_data in xml_worklist:
+                                sheets_dict = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
+                                if sheets_dict:
+                                    # Create single excel for this component
+                                    excel_buf = io.BytesIO()
+                                    with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
+                                        for s_name, s_df in sheets_dict.items():
+                                            s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
+                                    
+                                    # Clean filename for ZIP
+                                    parts = xml_name.split('/')[-1].split('_')
+                                    clean_fn = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else parts[0]
+                                    clean_fn = re.sub(r'\d+$', '', clean_fn) + ".xlsx"
+                                    
+                                    zout.writestr(clean_fn, excel_buf.getvalue())
+                                    processed_files += 1
                         
-                        if total_count > 0:
+                        if processed_files > 0:
                             st.session_state['zip_data'] = buf.getvalue()
-                            st.session_state['file_name'] = f"Legacy_Export_{file_date}.zip"
-                            st.session_state['count'] = total_count
+                            st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
+                            st.session_state['count'] = processed_files
             st.rerun()
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
     if 'zip_data' in st.session_state:
         st.divider()
-        st.success(f"✅ Success! Created {st.session_state.get('count', 0)} files.")
+        st.success(f"✅ Success! Created {st.session_state.get('count', 0)} multi-sheet Excel workbooks.")
         st.download_button(
             label=f"📥 Download {st.session_state['file_name']}",
             data=st.session_state['zip_data'],
