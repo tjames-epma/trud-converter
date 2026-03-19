@@ -39,7 +39,7 @@ def xml_to_excel_buffer(df, sheet_name):
 
 def split_and_zip_xml_recursive(xml_content, zip_out, base_name):
     """
-    ONLY USED FOR LEGACY EXPORT.
+    ONLY FOR LEGACY EXPORT.
     Recursively finds all unique record types within a TRUD XML.
     """
     try:
@@ -47,7 +47,7 @@ def split_and_zip_xml_recursive(xml_content, zip_out, base_name):
         root = tree.getroot()
         data_map = {}
         
-        # Scan tree for data containers (tags with children that have values)
+        # Scan tree for data containers
         for elem in root.findall(".//*"):
             if len(elem) > 0 and any(len(child) == 0 for child in elem):
                 tag_name = elem.tag.split('}')[-1]
@@ -88,7 +88,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v3.5 | Recursive Legacy Mode")
+        st.caption("v3.6 | Stable Build")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -109,4 +109,33 @@ if uploaded_file:
 
     if mode == "📦 Bulk Multi-File (Legacy)":
         st.subheader("Filter Exports")
-        options = ["amp", "ampp", "vmp", "vmpp", "v
+        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
+        
+        if 'sel_all' not in st.session_state: 
+            st.session_state.sel_all = True
+
+        def toggle_select():
+            st.session_state.sel_all = not st.session_state.sel_all
+
+        st.button("Toggle Select All/None", on_click=toggle_select)
+        selected_files = st.multiselect("Select components:", options, 
+                                       default=options if st.session_state.sel_all else [])
+
+    if st.button("🚀 Run Processor", use_container_width=True):
+        try:
+            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
+                all_names = outer_zip.namelist()
+                
+                if mode == "🔗 GTIN Mapper":
+                    with st.status("Mapping...", expanded=True):
+                        ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
+                        ampp_tree = ET.parse(outer_zip.open(ampp_file))
+                        ampp_rows = []
+                        for record in ampp_tree.getroot().findall(".//{*}AMPP"):
+                            ampp_rows.append({c.tag.split('}')[-1]: c.text for c in record})
+                        df_ampp = pd.DataFrame(ampp_rows)
+                        id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
+                        
+                        gtin_zip_path = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
+                        with outer_zip.open(gtin_zip_path) as zd:
+                            with zipfile.ZipFile(io.BytesIO(zd.read())) as
