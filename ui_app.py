@@ -44,7 +44,6 @@ def xml_to_excel_buffer(element_list, sheet_name):
     return output.getvalue()
 
 def process_complex_xml(xml_content, zip_out, base_name):
-    """Splits XML into sub-files. Returns the count of files successfully added to zip_out."""
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
@@ -61,52 +60,45 @@ def process_complex_xml(xml_content, zip_out, base_name):
                     zip_out.writestr(new_filename, xlsx_data)
                     local_count += 1
         return local_count
-    except Exception as e:
-        return 0
+    except: return 0
 
 # --- 4. SIDEBAR LOGIC ---
 def render_sidebar():
     with st.sidebar:
         st.title("Settings & Info")
-        st.info("v3.0 | Production Stable")
-        
         if 'mapped_df' in st.session_state:
             st.divider()
             st.subheader("🔍 Live Search Preview")
             q = st.text_input("Search by Name or ID", key="active_search")
-            
             df = st.session_state['mapped_df']
             id_col = st.session_state['id_col']
-            
             if q:
-                filtered = df[
-                    df['NM'].str.contains(q, case=False, na=False) | 
-                    df[id_col].str.contains(q, case=False, na=False)
-                ]
-                st.write(f"Results: {len(filtered)}")
+                filtered = df[df['NM'].str.contains(q, case=False, na=False) | df[id_col].str.contains(q, case=False, na=False)]
                 st.dataframe(filtered[['NM', 'GTIN', id_col]].head(10), hide_index=True)
             else:
-                st.write("Top 10 Results:")
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
-        
         st.divider()
-        st.caption("Built for EPMA Data Team")
+        st.caption("v3.1 | Sticky Button Build")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
-
 render_sidebar()
 
 uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
 
 if uploaded_file:
+    # Clear previous results if a new file is uploaded
+    if "last_uploaded" not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
+        st.session_state.last_uploaded = uploaded_file.name
+        if 'zip_data' in st.session_state: del st.session_state['zip_data']
+        if 'mapped_df' in st.session_state: del st.session_state['mapped_df']
+
     date_match = re.search(r'_(\d{8})', uploaded_file.name)
     file_date = date_match.group(1) if date_match else "Processed"
 
     mode = st.radio("**Select Action:**", ["🔗 GTIN Mapper", "📦 Bulk Multi-File (Legacy)"])
 
     if mode == "📦 Bulk Multi-File (Legacy)":
-        st.subheader("Filter Exports")
         options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
         if 'sel_all' not in st.session_state: st.session_state.sel_all = True
         if st.button("Toggle Select All/None"): 
@@ -114,93 +106,73 @@ if uploaded_file:
             st.rerun()
         selected_files = st.multiselect("Select components:", options, default=options if st.session_state.sel_all else [])
 
+    # Action Button
     if st.button("🚀 Run Processor", use_container_width=True):
         try:
             with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
                 all_names = outer_zip.namelist()
                 
                 if mode == "🔗 GTIN Mapper":
-                    with st.status("Mapping Barcodes...", expanded=True):
-                        # Use flexible matching for f_ampp2
-                        ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
+                    with st.status("Mapping...", expanded=True):
+                        ampp_file = [f for f in all_names if 'f_ampp2' in f.lower()][0]
                         tree = ET.parse(outer_zip.open(ampp_file))
                         root = tree.getroot()
-                        ampp_rows = []
-                        for record in root.findall(".//{*}AMPP"):
-                            entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
-                            if entry: ampp_rows.append(entry)
+                        ampp_rows = [{child.tag.split('}')[-1]: child.text for child in record} for record in root.findall(".//{*}AMPP")]
                         df_ampp = pd.DataFrame(ampp_rows)
                         id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
                         
-                        gtin_zip_name = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                        with outer_zip.open(gtin_zip_name) as inner_data:
-                            with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
-                                gtin_rows = []
-                                gtin_xml = [f for f in inner_zip.namelist() if f.endswith('.xml')][0]
-                                with inner_zip.open(gtin_xml) as f:
-                                    g_tree = ET.parse(f)
-                                    g_root = g_tree.getroot()
-                                    for ampp_block in g_root.findall(".//{*}AMPP"):
-                                        id_val = None
-                                        for id_tag in ["AMPPID", "APPID"]:
-                                            found = ampp_block.find(f".//{{*}}{id_tag}")
-                                            if found is not None: id_val = found.text; break
-                                        for g_data in ampp_block.findall(".//{*}GTINDATA"):
-                                            g_elem = g_data.find(".//{*}GTIN")
-                                            if g_elem is not None and id_val:
-                                                gtin_rows.append({'JOIN_ID': id_val, 'GTIN': g_elem.text})
-                                df_gtin = pd.DataFrame(gtin_rows)
+                        gtin_zip = [f for f in all_names if 'gtin' in f.lower()][0]
+                        with outer_zip.open(gtin_zip) as zd:
+                            with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                                g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
+                                g_root = ET.parse(iz.open(g_xml)).getroot()
+                                g_rows = []
+                                for b in g_root.findall(".//{*}AMPP"):
+                                    id_v = b.find(".//{*}AMPPID").text if b.find(".//{*}AMPPID") is not None else b.find(".//{*}APPID").text
+                                    for g in b.findall(".//{*}GTINDATA"):
+                                        ge = g.find(".//{*}GTIN")
+                                        if ge is not None: g_rows.append({'JOIN_ID': id_v, 'GTIN': ge.text})
+                                df_gtin = pd.DataFrame(g_rows)
 
                         final_df = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
-                        if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
-                        
                         st.session_state['mapped_df'] = final_df
                         st.session_state['id_col'] = id_col
-
+                        
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            final_df.to_excel(writer, index=False, sheet_name='GTIN_Mapping')
-                        
-                        st.success(f"Matched {len(final_df):,} barcodes!")
-                        st.download_button("📥 Download Mapping", output.getvalue(), f"TRUD_GTIN_{file_date}.xlsx")
-                        st.rerun()
+                            final_df.to_excel(writer, index=False)
+                        st.session_state['zip_data'] = output.getvalue()
+                        st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
 
-                else: # --- BULK LEGACY MODE ---
-                    with st.status("Deep Scanning & Splitting...", expanded=True):
-                        bulk_zip_buffer = io.BytesIO()
-                        total_xlsx_count = 0
-                        
-                        # CRITICAL: zipfile MUST close before we call getvalue()
-                        with zipfile.ZipFile(bulk_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_out:
-                            for filename in all_names:
-                                fn_lower = filename.lower()
-                                
-                                # Match standard XMLs
-                                if any(f"f_{opt}" in fn_lower for opt in selected_files) and fn_lower.endswith('.xml'):
-                                    st.write(f"📂 Splitting: `{filename}`")
-                                    with outer_zip.open(filename) as xml_f:
-                                        total_xlsx_count += process_complex_xml(xml_f, zip_out, filename)
-                                
-                                # Match nested ZIPs (GTIN/BNF)
-                                elif fn_lower.endswith('.zip') and any(opt in fn_lower for opt in selected_files):
-                                    st.write(f"📦 Sub-zip: `{filename}`")
-                                    with outer_zip.open(filename) as nested_data:
-                                        with zipfile.ZipFile(io.BytesIO(nested_data.read())) as inner_zip:
-                                            for inner_name in inner_zip.namelist():
-                                                if inner_name.endswith('.xml'):
-                                                    with inner_zip.open(inner_name) as current_xml:
-                                                        total_xlsx_count += process_complex_xml(current_xml, zip_out, inner_name)
-                        
-                        if total_xlsx_count > 0:
-                            st.success(f"Success! Created {total_xlsx_count} files.")
-                            st.download_button(
-                                label="📥 Download Full Legacy Zip", 
-                                data=bulk_zip_buffer.getvalue(), 
-                                file_name=f"Legacy_Split_{file_date}.zip",
-                                mime="application/zip"
-                            )
-                        else:
-                            st.error("No files found or split. Check filters.")
-
+                else: # BULK LEGACY
+                    with st.status("Processing...", expanded=True):
+                        buf = io.BytesIO()
+                        count = 0
+                        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                            for f in all_names:
+                                if any(f"f_{o}" in f.lower() for o in selected_files) and f.endswith('.xml'):
+                                    count += process_complex_xml(outer_zip.open(f), zout, f)
+                                elif f.lower().endswith('.zip') and any(o in f.lower() for o in selected_files):
+                                    with outer_zip.open(f) as nd:
+                                        with zipfile.ZipFile(io.BytesIO(nd.read())) as iz:
+                                            for iname in iz.namelist():
+                                                if iname.endswith('.xml'):
+                                                    count += process_complex_xml(iz.open(iname), zout, iname)
+                        st.session_state['zip_data'] = buf.getvalue()
+                        st.session_state['file_name'] = f"Legacy_Split_{file_date}.zip"
+                        st.session_state['count'] = count
+            st.rerun() # Refresh to show the sticky download button
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
+    # 6. STICKY DOWNLOAD SECTION (This stays on screen)
+    if 'zip_data' in st.session_state:
+        st.divider()
+        st.success(f"✅ Processing Complete! {st.session_state.get('count', '')} files ready.")
+        st.download_button(
+            label=f"📥 Download {st.session_state['file_name']}",
+            data=st.session_state['zip_data'],
+            file_name=st.session_state['file_name'],
+            mime="application/zip" if mode != "🔗 GTIN Mapper" else "application/vnd.ms-excel",
+            use_container_width=True
+        )
