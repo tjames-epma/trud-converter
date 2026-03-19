@@ -37,40 +37,47 @@ def xml_to_excel_buffer(df, sheet_name):
         df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
     return output.getvalue()
 
-def split_and_zip_xml_recursive(xml_content, zip_out, base_name):
+def legacy_recursive_splitter(xml_content, zip_out, base_name):
     """
-    MATCHES LEGACY SAMPLES: Recursively extracts every data-containing tag.
-    Affects ONLY Bulk Legacy Mode.
+    MATCHES SAMPLES: Recursively finds every data container tag.
+    Example: Finds BasisOfStrength, ColourInfo, Route, etc.
     """
     try:
         tree = ET.parse(xml_content)
         root = tree.getroot()
         data_map = {}
         
+        # We walk through every single element in the XML
         for elem in root.findall(".//*"):
-            # Identify a record container: has children, but children are values (no further children)
-            if len(elem) > 0 and all(len(child) == 0 for child in elem):
-                raw_tag = elem.tag.split('}')[-1]
-                # Clean tag names (e.g., ColourInfoType -> ColourInfo)
-                tag_name = raw_tag.replace('InfoType', '').replace('Type', '')
+            # Check if this element contains child tags with text values
+            # This identifies the 'rows' in your sample files
+            child_data = {child.tag.split('}')[-1]: child.text for child in elem if child.text is not None}
+            
+            if child_data:
+                tag_name = elem.tag.split('}')[-1]
+                # Clean up names to match samples (removing InfoType and Type)
+                clean_name = tag_name.replace('InfoType', '').replace('Type', '')
                 
-                row = {child.tag.split('}')[-1]: child.text for child in elem if child.text is not None}
-                if row:
-                    if tag_name not in data_map:
-                        data_map[tag_name] = []
-                    data_map[tag_name].append(row)
+                if clean_name not in data_map:
+                    data_map[clean_name] = []
+                data_map[clean_name].append(child_data)
         
         files_count = 0
-        fn = base_name.split('/')[-1].split('\\')[-1].replace('.xml', '')
-        # f_lookup2_123 -> f_lookup
-        prefix = re.sub(r'\d+$', '', fn.split('_')[0] + '_' + fn.split('_')[1]) if '_' in fn else fn
+        # Determine prefix (e.g., f_lookup)
+        fn_raw = base_name.split('/')[-1].split('\\')[-1].replace('.xml', '')
+        parts = fn_raw.split('_')
+        prefix = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else parts[0]
+        prefix = re.sub(r'\d+$', '', prefix) # Remove the '2' from 'f_lookup2'
         
         for tag, rows in data_map.items():
-            if rows:
+            # Only export tags that represent actual tables (more than 1 row or multiple columns)
+            if len(rows) > 0:
                 df = pd.DataFrame(rows).drop_duplicates()
-                xlsx_data = xml_to_excel_buffer(df, tag)
-                zip_out.writestr(f"{prefix}_{tag}.xlsx", xlsx_data)
-                files_count += 1
+                # Skip the high-level root wrappers (usually have very few columns)
+                if len(df.columns) > 1:
+                    xlsx_data = xml_to_excel_buffer(df, tag)
+                    zip_out.writestr(f"{prefix}_{tag}.xlsx", xlsx_data)
+                    files_count += 1
         return files_count
     except Exception:
         return 0
@@ -92,7 +99,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v3.8 | Legacy Export Refined")
+        st.caption("v3.9 | Sample Match Build")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -113,34 +120,4 @@ if uploaded_file:
 
     if mode == "📦 Bulk Multi-File (Legacy)":
         st.subheader("Filter Exports")
-        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        if 'sel_all' not in st.session_state: st.session_state.sel_all = True
-        
-        def toggle_select():
-            st.session_state.sel_all = not st.session_state.sel_all
-
-        st.button("Toggle Select All/None", on_click=toggle_select)
-        selected_files = st.multiselect("Select components:", options, default=options if st.session_state.sel_all else [])
-
-    if st.button("🚀 Run Processor", use_container_width=True):
-        try:
-            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                all_names = outer_zip.namelist()
-                
-                if mode == "🔗 GTIN Mapper":
-                    with st.status("Mapping...", expanded=True):
-                        # GTIN Mapper: Targeted Search (Unchanged)
-                        ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
-                        ampp_tree = ET.parse(outer_zip.open(ampp_file))
-                        ampp_rows = [{c.tag.split('}')[-1]: c.text for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
-                        df_ampp = pd.DataFrame(ampp_rows)
-                        id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
-                        
-                        gtin_zip_path = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                        with outer_zip.open(gtin_zip_path) as zd:
-                            with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                                g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
-                                g_root = ET.parse(iz.open(g_xml)).getroot()
-                                g_rows = []
-                                for b in g_root.findall(".//{*}AMPP"):
-                                    id_v = b.find(".//{*}AMPPID").text if b.find(".//{*}AMPPID") is not None else b.find(".//{*}APP
+        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin
