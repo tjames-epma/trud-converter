@@ -62,19 +62,61 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         root = tree.getroot()
         data_map = {}
         for elem in root.findall(".//*"):
-            # Logic update: capture child.text even if empty to ensure header keys exist
+            # Ensure we capture tags even if text is None to identify the presence of columns
             child_data = {child.tag.split('}')[-1]: (child.text if child.text is not None else "") for child in elem}
             if child_data:
                 raw_tag = elem.tag.split('}')[-1]
                 sheet_name = get_legacy_sheet_name(raw_tag, filename_lower)
                 if sheet_name not in data_map: data_map[sheet_name] = []
                 data_map[sheet_name].append(child_data)
+        
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows)
             
-            # Explicitly ensure ABBREVNM exists in key sheets even if empty across all rows
+            # Explicitly add ABBREVNM if it's missing from the data records
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
             
             df = df.drop_duplicates()
+            if len(df.columns) > 1:
+                # Keep ID and Name columns at the start for usability
+                cols = list(df.columns)
+                preferred = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
+                others = [c for c in cols if c not in preferred]
+                df = df[preferred + others]
+                final_sheets[sheet] = df
+        return final_sheets
+    except:
+        return {}
+
+# --- 4. SIDEBAR LOGIC ---
+def render_sidebar():
+    with st.sidebar:
+        st.title("Settings & Info")
+        if 'mapped_df' in st.session_state:
+            st.divider()
+            st.subheader("🔍 Live Search Preview")
+            q = st.text_input("Search Name or ID", key="active_search")
+            df = st.session_state['mapped_df']
+            id_col = st.session_state['id_col']
+            if q:
+                filtered = df[df['NM'].astype(str).str.contains(q, case=False, na=False) | 
+                              df[id_col].astype(str).str.contains(q, case=False, na=False)]
+                st.dataframe(filtered[['NM', 'GTIN', id_col]].head(10), hide_index=True)
+            else:
+                st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
+        st.divider()
+        st.caption("v4.5.1 | ABBREVNM Fix")
+
+# --- 5. MAIN UI ---
+st.title("💊 TRUD Data Toolkit")
+render_sidebar()
+
+uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
+
+if uploaded_file:
+    if "last_uploaded" not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
+        st.session_state.last_uploaded = uploaded_file.name
+        if 'zip_data' in st.session_state: del st.session_state['zip_data']
+        if 'mapped_df' in st.session_state: del st.session_state
