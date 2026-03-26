@@ -5,7 +5,8 @@ import pandas as pd
 import io
 import re
 
-# 1. Page Configuration - Must be the very first Streamlit command
+# RULE 1: set_page_config must be the FIRST Streamlit command.
+# Do not place ANY st. commands above this.
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
 # --- 2. PASSWORD GATEKEEPER ---
@@ -27,7 +28,6 @@ def check_password():
 # --- 3. LOGIC FUNCTIONS ---
 
 def get_legacy_sheet_name(tag, filename_lower):
-    """Maps XML tags to specific sheet names based on user samples."""
     tag = tag.split('}')[-1]
     if "f_ampp" in filename_lower:
         mapping = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
@@ -52,40 +52,27 @@ def get_legacy_sheet_name(tag, filename_lower):
     return tag.replace("InfoType", "").replace("Type", "")
 
 def process_legacy_xml_to_sheets(xml_file_obj, filename_lower):
-    """Streams XML using iterparse to keep memory usage low (prevents White Screen)."""
     try:
         data_map = {}
-        # Use iterparse to avoid loading huge XMLs into RAM all at once
         context = ET.iterparse(xml_file_obj, events=("end",))
-        
         for event, elem in context:
             tag_name = elem.tag.split('}')[-1]
             sheet_name = get_legacy_sheet_name(tag_name, filename_lower)
-            
-            # If the element has children, it's a row of data
             if len(elem) > 0:
                 child_data = {child.tag.split('}')[-1]: (child.text if child.text is not None else "") for child in elem}
-                
                 if child_data:
                     if sheet_name not in data_map:
                         data_map[sheet_name] = []
                     data_map[sheet_name].append(child_data)
-            
-            # Memory Management: Clear the element after we've extracted its data
             elem.clear()
-            
+        
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows)
-            
-            # Mandatory Column: Ensure ABBREVNM exists in key sheets even if empty in XML
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
-            
             df = df.drop_duplicates()
-            
             if len(df.columns) > 1:
-                # Optimized Column Order: ID -> Name -> Abbrev Name -> Others
                 cols = list(df.columns)
                 preferred = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
                 others = [c for c in cols if c not in preferred]
@@ -96,7 +83,7 @@ def process_legacy_xml_to_sheets(xml_file_obj, filename_lower):
         st.error(f"Error processing {filename_lower}: {e}")
         return {}
 
-# --- 4. MAIN APP LOGIC ---
+# --- 4. WRAPPER FOR MAIN APP ---
 
 def main():
     if not check_password():
@@ -104,20 +91,10 @@ def main():
 
     st.title("💊 TRUD Data Toolkit")
     
-    # Sidebar search and info
     with st.sidebar:
         st.title("Settings")
         if 'mapped_df' in st.session_state:
             st.divider()
             st.subheader("🔍 Quick Search")
             q = st.text_input("Name or ID")
-            df = st.session_state['mapped_df']
-            id_col = st.session_state['id_col']
-            if q:
-                res = df[df['NM'].astype(str).str.contains(q, case=False, na=False) | 
-                         df[id_col].astype(str).str.contains(q, case=False, na=False)]
-                st.dataframe(res[['NM', 'GTIN', id_col]].head(10), hide_index=True)
-        st.divider()
-        st.caption("v4.8 | Memory-Safe Streaming Build")
-
-    uploaded_file = st.file_
+            df = st.session
