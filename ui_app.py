@@ -5,10 +5,10 @@ import pandas as pd
 import io
 import re
 
-# 1. Essential Config
+# 1. Essential Config - MUST be first
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
-# 2. Simplified Auth Logic (Prevents Refresh Loops)
+# 2. Stable Auth Logic
 def check_password():
     if "auth" not in st.secrets:
         return True
@@ -25,7 +25,7 @@ def check_password():
             st.error("Invalid password")
     return False
 
-# 3. Memory-Safe Logic
+# 3. Memory-Safe Streaming Logic
 def get_legacy_sheet_name(tag, filename_lower):
     tag = tag.split('}')[-1]
     if "f_ampp" in filename_lower:
@@ -80,73 +80,31 @@ def process_legacy_xml_to_sheets(xml_file_obj, filename_lower):
     except:
         return {}
 
-# 4. Main App
+# 4. Main App Logic
 def main():
     if not check_password():
-        return
+        st.stop()
 
     st.title("💊 TRUD Data Toolkit")
     
+    # --- Sidebar Configuration ---
     with st.sidebar:
-        st.caption("v5.0 | Stability Build")
-        if st.button("Clear Cache & Logout"):
+        st.header("App Settings")
+        mode = st.radio("Tool Mode", ["📦 Bulk Multi-File", "🔗 GTIN Mapper"])
+        
+        selected_files = []
+        if mode == "📦 Bulk Multi-File":
+            st.divider()
+            st.subheader("Filter Components")
+            options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
+            selected_files = st.multiselect("Include in export:", options, default=options)
+
+        st.divider()
+        if st.button("Logout / Reset App"):
             st.session_state.clear()
             st.rerun()
 
+    # --- Main UI ---
     uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
 
-    if uploaded_file:
-        mode = st.radio("Action", ["📦 Bulk Multi-File", "🔗 GTIN Mapper"])
-        
-        if st.button("🚀 Process File"):
-            with st.spinner("Crunching TRUD data..."):
-                try:
-                    with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                        all_names = outer_zip.namelist()
-                        buf = io.BytesIO()
-                        
-                        if mode == "📦 Bulk Multi-File":
-                            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                                xml_worklist = []
-                                for f in all_names:
-                                    if f.endswith('.xml'): xml_worklist.append((f, outer_zip.open(f)))
-                                    elif f.endswith('.zip'):
-                                        with outer_zip.open(f) as zd_inner:
-                                            with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
-                                                for iname in iz_inner.namelist():
-                                                    if iname.endswith('.xml'):
-                                                        xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
-                                
-                                for xml_name, xml_data in xml_worklist:
-                                    sheets = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
-                                    if sheets:
-                                        ex_buf = io.BytesIO()
-                                        with pd.ExcelWriter(ex_buf, engine='openpyxl') as writer:
-                                            for s_name, s_df in sheets.items():
-                                                s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
-                                        
-                                        clean_fn = re.sub(r'\d+', '', xml_name.split('/')[-1].split('.')[0]) + ".xlsx"
-                                        zout.writestr(clean_fn, ex_buf.getvalue())
-                            
-                            st.session_state['ready_data'] = buf.getvalue()
-                            st.session_state['ready_name'] = "TRUD_Export.zip"
-
-                        else: # GTIN Mapper
-                            # ... (Simplified GTIN Mapper logic)
-                            pass
-
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    if 'ready_data' in st.session_state:
-        st.success("Processing Complete!")
-        st.download_button(
-            "📥 Download Result",
-            data=st.session_state['ready_data'],
-            file_name=st.session_state['ready_name'],
-            mime="application/zip",
-            use_container_width=True
-        )
-
-if __name__ == "__main__":
-    main()
+    if uploaded_file
