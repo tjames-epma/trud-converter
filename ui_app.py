@@ -62,7 +62,9 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         root = tree.getroot()
         data_map = {}
         for elem in root.findall(".//*"):
-            child_data = {child.tag.split('}')[-1]: child.text for child in elem if child.text is not None}
+            # FIX: Included tags even if child.text is None to ensure headers like ABBREVNM appear
+            child_data = {child.tag.split('}')[-1]: (child.text if child.text is not None else "") for child in elem}
+            
             if child_data:
                 raw_tag = elem.tag.split('}')[-1]
                 sheet_name = get_legacy_sheet_name(raw_tag, filename_lower)
@@ -71,6 +73,7 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
+            # Ensure we only keep sheets that have data beyond just the tag name
             if len(df.columns) > 1: final_sheets[sheet] = df
         return final_sheets
     except: return {}
@@ -92,7 +95,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.5 | Zip Fix")
+        st.caption("v4.6 | Column Header Fix")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -129,7 +132,7 @@ if uploaded_file:
                     with st.status("Mapping Barcodes...", expanded=True):
                         ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
                         ampp_tree = ET.parse(outer_zip.open(ampp_file))
-                        ampp_rows = [{c.tag.split('}')[-1]: c.text for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
+                        ampp_rows = [{c.tag.split('}')[-1]: (c.text if c.text is not None else "") for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
                         df_ampp = pd.DataFrame(ampp_rows)
                         id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
                         
@@ -194,7 +197,6 @@ if uploaded_file:
                                 processed_files += 1
                             progress_bar.progress((i + 1) / total_items)
                         
-                    # CRITICAL FIX: Update session state ONLY after 'with' block is closed and ZIP is finalized
                     st.session_state['zip_data'] = buf.getvalue()
                     st.session_state['file_name'] = f"Legacy_Sheets_Export_{file_date}.zip"
                     st.session_state['count'] = processed_files
