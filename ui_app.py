@@ -167,7 +167,7 @@ if uploaded_file is not None:
                         st.download_button(
                             label="📥 Download Power Query Ready Excel",
                             data=processed_data,
-                            file_name=f"TRUD_GTIN_Export_{week_num}.xlsx"
+                            file_name=f"GTIN_building.xlsx"
                         )
             except Exception as e:
                 st.error(f"An error occurred: {e}")
