@@ -70,7 +70,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9.5 | Syntax Recovery Build")
+    st.caption("v6.9.6 | Colon Restoration")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
@@ -112,4 +112,24 @@ if uploaded_file:
                             for i, (name, data) in enumerate(xml_worklist):
                                 status_text.text(f"Processing {i+1} of {total_files}: {name}")
                                 sheets = process_legacy_xml_to_sheets(data, name.lower())
-                                if sheets
+                                # FIXED: Added colon and completed the block
+                                if sheets:
+                                    xl_buf = io.BytesIO()
+                                    with pd.ExcelWriter(xl_buf) as writer:
+                                        for s_name, s_df in sheets.items():
+                                            s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
+                                    clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]).strip('_') + ".xlsx"
+                                    zout.writestr(clean_fn, xl_buf.getvalue())
+                                progress_bar.progress((i + 1) / total_files)
+                    
+                    st.session_state['zip_data'] = buf.getvalue()
+                    st.session_state['file_name'] = "TRUD_Bulk_Export.zip"
+                    status_text.empty()
+                    progress_bar.empty()
+                
+                elif mode == "🔗 GTIN Mapper":
+                    status_text = st.empty()
+                    progress_bar = st.progress(0)
+                    
+                    status_text.text("Step 1/3: Reading AMPP Data...")
+                    ampp
