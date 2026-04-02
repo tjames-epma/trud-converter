@@ -70,7 +70,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9 | Syntax Fix")
+    st.caption("v6.9.1 | Line Completion Fix")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
@@ -81,26 +81,4 @@ if uploaded_file:
     selected_files = []
     if mode == "📦 Bulk Export":
         st.subheader("Filter Components")
-        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        selected_files = st.multiselect("Select components to include:", options, default=options)
-    
-    if st.button("🚀 Run Processor", use_container_width=True):
-        try:
-            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                all_names = outer_zip.namelist()
-                buf = io.BytesIO()
-                
-                if mode == "📦 Bulk Export":
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        xml_worklist = []
-                        for f in all_names:
-                            fn_l = f.lower()
-                            if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                xml_worklist.append((f, outer_zip.open(f)))
-                            elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
-                                with outer_zip.open(f) as zd_inner:
-                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
-                                        for iname in iz_inner.
+        options = ["amp", "ampp", "vmp", "vmpp", "vtm",
