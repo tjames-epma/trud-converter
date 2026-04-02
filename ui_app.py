@@ -70,6 +70,21 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9.2 | Syntax Closure Fix")
+    st.caption("v6.9.3 | Final Syntax Recovery")
 
-uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="
+# FIXED: Completed the string and function call for the file uploader
+uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
+
+if uploaded_file:
+    st.divider()
+    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
+
+    selected_files = []
+    if mode == "📦 Bulk Export":
+        st.subheader("Filter Components")
+        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
+        selected_files = st.multiselect("Select components to include:", options, default=options)
+    
+    if st.button("🚀 Run Processor", use_container_width=True):
+        try:
+            with zipfile.ZipFile
