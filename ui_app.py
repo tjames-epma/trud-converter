@@ -5,10 +5,10 @@ import pandas as pd
 import io
 import re
 
-# 1. Page Config - MUST be absolute first
+# 1. Page Config - Must be absolute first
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
-# --- 2. THE GATEKEEPER (Linear Auth) ---
+# --- 2. THE GATEKEEPER ---
 if "password_correct" not in st.session_state:
     st.title("🔐 Access Required")
     pwd = st.text_input("Please enter the access password", type="password")
@@ -47,12 +47,11 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            # FORCE ABBREVNM COLUMN
+            # Mandatory Column Fix
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
             
             if len(df.columns) > 1:
-                # FIXED: Added the missing indented block here
                 cols = list(df.columns)
                 head = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
                 rest = [c for c in cols if c not in head]
@@ -61,11 +60,105 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
     except:
         return {}
 
-# --- 4. THE APP ---
+# --- 4. MAIN UI ---
 
 st.title("💊 TRUD Data Toolkit")
 
 with st.sidebar:
-    st.caption("v6.2 | Indent Fix")
-    if st.button("Logout"):
-        del st.session_
+    st.subheader("App Controls")
+    if st.button("Logout / Reset App"):
+        st.session_state.clear()
+        st.rerun()
+    st.divider()
+    st.caption("v6.3 | UI Recovery Build")
+
+# This part only runs if Step 2 (Gatekeeper) passed
+uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
+
+if uploaded_file:
+    st.divider()
+    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
+
+    if mode == "📦 Bulk Export":
+        st.info("This will extract all components into individual multi-sheet Excel workbooks.")
+    
+    if st.button("🚀 Run Processor", use_container_width=True):
+        try:
+            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
+                all_names = outer_zip.namelist()
+                buf = io.BytesIO()
+                
+                if mode == "📦 Bulk Export":
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                        xml_worklist = []
+                        for f in all_names:
+                            if f.lower().endswith('.xml'):
+                                xml_worklist.append((f, outer_zip.open(f)))
+                            elif f.lower().endswith('.zip'):
+                                with outer_zip.open(f) as zd_inner:
+                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
+                                        for iname in iz_inner.namelist():
+                                            if iname.endswith('.xml'):
+                                                xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
+
+                        for name, data in xml_worklist:
+                            sheets = process_legacy_xml_to_sheets(data, name.lower())
+                            if sheets:
+                                xl_buf = io.BytesIO()
+                                with pd.ExcelWriter(xl_buf) as writer:
+                                    for s_name, s_df in sheets.items():
+                                        s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
+                                clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]).strip('_') + ".xlsx"
+                                zout.writestr(clean_fn, xl_buf.getvalue())
+                    
+                    st.session_state['zip_data'] = buf.getvalue()
+                    st.session_state['file_name'] = "TRUD_Bulk_Export.zip"
+                
+                elif mode == "🔗 GTIN Mapper":
+                    # Memory-safe GTIN extraction
+                    ampp_f = [f for f in all_names if 'f_ampp2' in f.lower()][0]
+                    ampp_rows = []
+                    for ev, el in ET.iterparse(outer_zip.open(ampp_f), events=("end",)):
+                        if el.tag.split('}')[-1] == 'AMPP':
+                            ampp_rows.append({c.tag.split('}')[-1]: (c.text if c.text else "") for c in el})
+                        el.clear()
+                    df_ampp = pd.DataFrame(ampp_rows)
+                    
+                    gtin_z = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
+                    g_rows = []
+                    with outer_zip.open(gtin_z) as zd:
+                        with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                            g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
+                            for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
+                                if el.tag.split('}')[-1] == 'AMPP':
+                                    id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID")
+                                    if id_el is not None:
+                                        for gd in el.findall(".//{*}GTINDATA"):
+                                            gtin = gd.find(".//{*}GTIN")
+                                            if gtin is not None: 
+                                                g_rows.append({'JOIN_ID': id_el.text, 'GTIN': gtin.text})
+                                el.clear()
+                    
+                    id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
+                    final = pd.merge(df_ampp, pd.DataFrame(g_rows), left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
+                    
+                    xl_buf = io.BytesIO()
+                    with pd.ExcelWriter(xl_buf) as writer:
+                        final.to_excel(writer, index=False)
+                    
+                    st.session_state['zip_data'] = xl_buf.getvalue()
+                    st.session_state['file_name'] = "GTIN_Mapped_Export.xlsx"
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
+
+# Persistence of Download button
+if 'zip_data' in st.session_state:
+    st.divider()
+    st.success(f"Successfully processed {st.session_state['file_name']}")
+    st.download_button(
+        label=f"📥 Download {st.session_state['file_name']}",
+        data=st.session_state['zip_data'],
+        file_name=st.session_state['file_name'],
+        use_container_width=True
+    )
