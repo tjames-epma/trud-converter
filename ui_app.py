@@ -11,89 +11,80 @@ st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wid
 # --- 2. THE GATEKEEPER ---
 if "password_correct" not in st.session_state:
     st.title("🔐 Access Required")
-    pwd = st.text_input("Please enter the access password", type="password")
+    pwd = st.text_input("Please enter password", type="password")
     if st.button("Sign In"):
         if "auth" in st.secrets and pwd == st.secrets["auth"]["password"]:
             st.session_state["password_correct"] = True
             st.rerun()
-        else:
-            st.error("Invalid password")
+        else: st.error("Invalid password")
     st.stop()
 
 # --- 3. LOGIC FUNCTIONS ---
-
-def get_legacy_sheet_name(tag, filename_lower):
+def get_legacy_sheet_name(tag, fn):
     tag = tag.split('}')[-1]
-    if "f_ampp" in filename_lower:
-        mapping = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
-                   "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
-        return mapping.get(tag, tag)
+    if "f_ampp" in fn:
+        m = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
+             "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
+        return m.get(tag, tag)
     return tag.replace("Type", "")
 
-def process_legacy_xml_to_sheets(xml_content, filename_lower):
+def process_xml(xml_content, fn):
     try:
         data_map = {}
-        context = ET.iterparse(xml_content, events=("end",))
-        for event, elem in context:
-            tag_name = elem.tag.split('}')[-1]
-            sheet_name = get_legacy_sheet_name(tag_name, filename_lower)
+        for ev, elem in ET.iterparse(xml_content, events=("end",)):
+            tag = elem.tag.split('}')[-1]
+            sheet = get_legacy_sheet_name(tag, fn)
             if len(elem) > 0:
-                child_data = {child.tag.split('}')[-1]: (child.text if child.text else "") for child in elem}
-                if sheet_name not in data_map: data_map[sheet_name] = []
-                data_map[sheet_name].append(child_data)
+                child_data = {c.tag.split('}')[-1]: (c.text or "") for c in elem}
+                if sheet not in data_map: data_map[sheet] = []
+                data_map[sheet].append(child_data)
             elem.clear()
-
-        final_sheets = {}
-        for sheet, rows in data_map.items():
+        final = {}
+        for s, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
-                df["ABBREVNM"] = ""
+            if s in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns: df["ABBREVNM"] = ""
             if len(df.columns) > 1:
                 cols = list(df.columns)
                 head = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
-                rest = [c for c in cols if c not in head]
-                final_sheets[sheet] = df[head + rest]
-        return final_sheets
+                final[s] = df[head + [c for c in cols if c not in head]]
+        return final
     except: return {}
 
 # --- 4. MAIN UI ---
-
 st.title("💊 TRUD Data Toolkit")
-
 with st.sidebar:
-    st.subheader("App Controls")
-    if st.button("Logout / Reset App"):
+    if st.button("Reset App"):
         st.session_state.clear()
         st.rerun()
-    st.divider()
-    st.caption("v6.9.7 | Structural Fix")
+    st.caption("v6.9.8 | Flat Build")
 
-uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
+uploaded_file = st.file_uploader("📤 Drop TRUD ZIP here", type="zip")
 
 if uploaded_file:
-    st.divider()
-    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
+    mode = st.radio("Action", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
+    sel = st.multiselect("Filters", ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "lookup"], default=["amp", "ampp", "vmp", "vmpp", "vtm"]) if mode == "📦 Bulk Export" else []
 
-    selected_files = []
-    if mode == "📦 Bulk Export":
-        st.subheader("Filter Components")
-        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        selected_files = st.multiselect("Select components:", options, default=options)
-    
     if st.button("🚀 Run Processor", use_container_width=True):
         try:
-            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                all_names = outer_zip.namelist()
-                buf = io.BytesIO()
+            with zipfile.ZipFile(uploaded_file, 'r') as outer:
+                names = outer.namelist(); buf = io.BytesIO()
+                pb = st.progress(0); txt = st.empty()
                 
                 if mode == "📦 Bulk Export":
-                    pb = st.progress(0); st_txt = st.empty()
                     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        xml_work = []
-                        for f in all_names:
-                            fn_l = f.lower()
-                            if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                xml_work.append((f, outer_zip.open(f)))
-                            elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
-                                with outer_zip.open(f) as zd:
-                                    with zip
+                        work = []
+                        for f in names:
+                            if any(f"f_{o}" in f.lower() for o in sel) and f.endswith('.xml'): work.append((f, outer.open(f)))
+                            elif f.lower().endswith('.zip') and any(o in f.lower() for o in sel):
+                                with outer.open(f) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                                    for i in iz.namelist():
+                                        if i.endswith('.xml'): work.append((i, io.BytesIO(iz.read(i))))
+                        for i, (n, d) in enumerate(work):
+                            txt.text(f"File {i+1}/{len(work)}: {n}")
+                            sheets = process_xml(d, n.lower())
+                            if sheets:
+                                xl_b = io.BytesIO()
+                                with pd.ExcelWriter(xl_b) as wr:
+                                    for sn, sdf in sheets.items(): sdf.to_excel(wr, index=False, sheet_name=sn[:31])
+                                zout.writestr(re.sub(r'\d+', '', n.split('/')[-1].split('.')[0]).strip('_') + ".xlsx", xl_b.getvalue())
+                            pb.
