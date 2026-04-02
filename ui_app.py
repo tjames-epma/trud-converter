@@ -56,7 +56,7 @@ with st.sidebar:
     if st.button("Reset App"):
         st.session_state.clear()
         st.rerun()
-    st.caption("v6.9.8 | Flat Build")
+    st.caption("v6.9.9 | GTIN Data Type Fix")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP here", type="zip")
 
@@ -76,7 +76,7 @@ if uploaded_file:
                         for f in names:
                             if any(f"f_{o}" in f.lower() for o in sel) and f.endswith('.xml'): work.append((f, outer.open(f)))
                             elif f.lower().endswith('.zip') and any(o in f.lower() for o in sel):
-                                with outer.open(f) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                                with outer_zip.open(f) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
                                     for i in iz.namelist():
                                         if i.endswith('.xml'): work.append((i, io.BytesIO(iz.read(i))))
                         for i, (n, d) in enumerate(work):
@@ -103,22 +103,29 @@ if uploaded_file:
                     with outer.open(gtin_z) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
                         g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
                         for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
-                            if el.tag.split('}')[-1] == 'AMPP':
-                                id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID")
+                            if el.tag.split('}')[-1] in ['AMPP', 'APP']:
+                                id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID") or el.find(".//{*}ID")
                                 if id_el is not None and id_el.text:
                                     for gd in el.findall(".//{*}GTINDATA"):
                                         gtin = gd.find(".//{*}GTIN")
-                                        if gtin is not None and gtin.text: g_rows.append({'JOIN_ID': id_el.text, 'GTIN': gtin.text})
+                                        if gtin is not None and gtin.text: g_rows.append({'JOIN_ID': str(id_el.text), 'GTIN': str(gtin.text)})
                             el.clear()
                     df_gtin = pd.DataFrame(g_rows) if g_rows else pd.DataFrame(columns=['JOIN_ID', 'GTIN']); pb.progress(66)
                     
                     txt.text("3/3: Merging..."); id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
-                    if id_col:
-                        final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
+                    if id_col and not df_gtin.empty:
+                        # Force string type on both sides to prevent empty merge
+                        df_ampp[id_col] = df_ampp[id_col].astype(str)
+                        df_gtin['JOIN_ID'] = df_gtin['JOIN_ID'].astype(str)
+                        
+                        final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='inner')
                         if 'JOIN_ID' in final.columns: final = final.drop(columns=['JOIN_ID'])
+                        
                         xl_b = io.BytesIO()
                         with pd.ExcelWriter(xl_b) as wr: final.to_excel(wr, index=False)
                         st.session_state.zip_data, st.session_state.file_name = xl_b.getvalue(), "GTIN_Mapped.xlsx"
+                    else:
+                        st.warning("No matches found. Check if the ZIP contains the correct dm+d files.")
                     pb.progress(100)
                 txt.empty(); pb.empty()
         except Exception as e: st.error(f"❌ Error: {e}")
