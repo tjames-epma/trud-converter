@@ -10,14 +10,11 @@ st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wid
 
 # --- 2. STABLE PASSWORD GATE ---
 def check_password():
-    """Returns True if the user had the correct password."""
     if "auth" not in st.secrets:
         return True
-    
     if st.session_state.get("password_correct"):
         return True
 
-    # Show login screen
     st.title("🔐 Access Required")
     pwd = st.text_input("Please enter the access password", type="password")
     if st.button("Sign In"):
@@ -75,7 +72,7 @@ def main():
     st.title("💊 TRUD Data Toolkit")
     
     with st.sidebar:
-        st.caption("v5.7 | No-Loop Build")
+        st.caption("v5.8 | Syntax Fix")
         if st.button("Logout / Clear Session"):
             st.session_state.clear()
             st.rerun()
@@ -116,12 +113,3 @@ def main():
                         
                         st.session_state['zip_data'] = buf.getvalue()
                         st.session_state['file_name'] = "TRUD_Export.zip"
-                    
-                    elif mode == "🔗 GTIN Mapper":
-                        status_text = st.empty()
-                        progress_bar = st.progress(0)
-                        
-                        status_text.text("Step 1/3: Reading AMPP Data...")
-                        ampp_f = [f for f in all_names if 'f_ampp2' in f.lower()][0]
-                        ampp_rows = []
-                        for ev, el in ET.iter
