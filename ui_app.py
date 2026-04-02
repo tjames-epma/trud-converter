@@ -8,24 +8,19 @@ import re
 # 1. Page Config - MUST be absolute first
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
-# --- 2. STABLE PASSWORD GATE ---
-def check_password():
-    if "auth" not in st.secrets:
-        return True
-    if st.session_state.get("password_correct"):
-        return True
-
+# --- 2. THE GATEKEEPER (Linear Auth) ---
+if "password_correct" not in st.session_state:
     st.title("🔐 Access Required")
     pwd = st.text_input("Please enter the access password", type="password")
     if st.button("Sign In"):
-        if pwd == st.secrets["auth"]["password"]:
+        if "auth" in st.secrets and pwd == st.secrets["auth"]["password"]:
             st.session_state["password_correct"] = True
             st.rerun()
         else:
             st.error("Invalid password")
-    return False
+    st.stop() # Stops everything else from loading until logged in
 
-# --- 3. PROCESSING LOGIC ---
+# --- 3. LOGIC FUNCTIONS ---
 
 def get_legacy_sheet_name(tag, filename_lower):
     tag = tag.split('}')[-1]
@@ -55,18 +50,3 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
             if len(df.columns) > 1:
-                cols = list(df.columns)
-                head = [c for c in ["APPID", "AMPPID", "NM", "ABBREVNM"] if c in cols]
-                rest = [c for c in cols if c not in head]
-                final_sheets[sheet] = df[head + rest]
-        return final_sheets
-    except:
-        return {}
-
-# --- 4. MAIN APP ---
-
-def main():
-    if not check_password():
-        st.stop()
-
-    st.title("💊 TRUD Data Toolkit")
