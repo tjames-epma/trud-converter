@@ -70,20 +70,3 @@ def main():
         st.stop()
 
     st.title("💊 TRUD Data Toolkit")
-    
-    with st.sidebar:
-        st.caption("v5.9 | Try/Except Fix")
-        if st.button("Logout / Clear Session"):
-            st.session_state.clear()
-            st.rerun()
-
-    uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
-
-    if uploaded_file:
-        mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"])
-
-        if st.button("🚀 Run Processor", use_container_width=True):
-            # This try block must be followed by an except block
-            try:
-                with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                    all_names
