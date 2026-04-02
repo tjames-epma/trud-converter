@@ -47,7 +47,7 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            # Mandatory Column Fix
+            # Mandatory ABBREVNM Column Fix
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
             
@@ -70,7 +70,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9.4 | ZipFile Syntax Fix")
+    st.caption("v6.9.5 | Syntax Recovery Build")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
@@ -94,7 +94,6 @@ if uploaded_file:
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # FIXED: Restored the complete ZipFile line with colon
                     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                         xml_worklist = []
                         for f in all_names:
@@ -113,35 +112,4 @@ if uploaded_file:
                             for i, (name, data) in enumerate(xml_worklist):
                                 status_text.text(f"Processing {i+1} of {total_files}: {name}")
                                 sheets = process_legacy_xml_to_sheets(data, name.lower())
-                                if sheets:
-                                    xl_buf = io.BytesIO()
-                                    with pd.ExcelWriter(xl_buf) as writer:
-                                        for s_name, s_df in sheets.items():
-                                            s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
-                                    clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]).strip('_') + ".xlsx"
-                                    zout.writestr(clean_fn, xl_buf.getvalue())
-                                progress_bar.progress((i + 1) / total_files)
-                    
-                    st.session_state['zip_data'] = buf.getvalue()
-                    st.session_state['file_name'] = "TRUD_Bulk_Export.zip"
-                    status_text.empty()
-                    progress_bar.empty()
-                
-                elif mode == "🔗 GTIN Mapper":
-                    status_text = st.empty()
-                    progress_bar = st.progress(0)
-                    
-                    status_text.text("Step 1/3: Reading AMPP Data...")
-                    ampp_f = [f for f in all_names if 'f_ampp2' in f.lower()][0]
-                    ampp_rows = []
-                    for ev, el in ET.iterparse(outer_zip.open(ampp_f), events=("end",)):
-                        if el.tag.split('}')[-1] == 'AMPP':
-                            ampp_rows.append({c.tag.split('}')[-1]: (c.text if c.text else "") for c in el})
-                        el.clear()
-                    df_ampp = pd.DataFrame(ampp_rows)
-                    progress_bar.progress(33)
-                    
-                    status_text.text("Step 2/3: Reading GTIN Data...")
-                    gtin_z = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                    g_rows = []
-                    with outer
+                                if sheets
