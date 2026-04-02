@@ -32,6 +32,7 @@ if not check_password():
 # --- 3. LOGIC FUNCTIONS ---
 
 def get_legacy_sheet_name(tag, filename_lower):
+    """Maps XML tags to specific sheet names based on user samples."""
     tag = tag.split('}')[-1]
     if "f_ampp" in filename_lower:
         mapping = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
@@ -104,7 +105,7 @@ def render_sidebar():
             else:
                 st.dataframe(df[['NM', 'GTIN', id_col]].head(10), hide_index=True)
         st.divider()
-        st.caption("v4.5.2 | ABBREVNM & Indent Fix")
+        st.caption("v4.5.3 | GTIN Mapper Restored")
 
 # --- 5. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -156,7 +157,7 @@ if uploaded_file:
                                                 xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
 
                         for i, (xml_name, xml_data) in enumerate(xml_worklist):
-                            status_text.text(f"Processing {i+1} of {len(xml_worklist)}: {xml_name}")
+                            status_text.text(f"Processing Component {i+1} of {len(xml_worklist)}: {xml_name}")
                             sheets_dict = process_legacy_xml_to_sheets(xml_data, xml_name.lower())
                             if sheets_dict:
                                 excel_buf = io.BytesIO()
@@ -181,12 +182,52 @@ if uploaded_file:
 
     elif mode == "🔗 GTIN Mapper":
         if st.button("🚀 Run GTIN Mapper", use_container_width=True):
-            # ... (Existing GTIN logic remains exactly as per v4.5)
-            pass
+            try:
+                with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
+                    all_names = outer_zip.namelist()
+                    with st.status("Mapping Barcodes...", expanded=True):
+                        # Extract AMPP Names
+                        ampp_file = [f for f in all_names if 'f_ampp2' in f.lower() and f.endswith('.xml')][0]
+                        ampp_tree = ET.parse(outer_zip.open(ampp_file))
+                        ampp_rows = [{c.tag.split('}')[-1]: c.text for c in record} for record in ampp_tree.getroot().findall(".//{*}AMPP")]
+                        df_ampp = pd.DataFrame(ampp_rows)
+                        id_col = next((c for c in ['AMPPID', 'APPID', 'APID'] if c in df_ampp.columns), None)
+                        
+                        # Extract GTINs
+                        gtin_zip_name = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
+                        with outer_zip.open(gtin_zip_name) as zd:
+                            with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                                g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
+                                g_rows = []
+                                for b in ET.parse(iz.open(g_xml)).getroot().findall(".//{*}AMPP"):
+                                    id_found = b.find(".//{*}AMPPID")
+                                    if id_found is None: id_found = b.find(".//{*}APPID")
+                                    if id_found is not None:
+                                        id_v = id_found.text
+                                        for g in b.findall(".//{*}GTINDATA"):
+                                            ge = g.find(".//{*}GTIN")
+                                            if ge is not None: g_rows.append({'JOIN_ID': id_v, 'GTIN': ge.text})
+                                df_gtin = pd.DataFrame(g_rows)
+                        
+                        # Join
+                        final_df = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
+                        if 'JOIN_ID' in final_df.columns: final_df = final_df.drop(columns=['JOIN_ID'])
+                        st.session_state['mapped_df'] = final_df
+                        st.session_state['id_col'] = id_col
+                        
+                        excel_buf = io.BytesIO()
+                        with pd.ExcelWriter(excel_buf, engine='openpyxl') as writer:
+                            final_df.to_excel(writer, index=False)
+                        st.session_state['zip_data'] = excel_buf.getvalue()
+                        st.session_state['file_name'] = f"TRUD_GTIN_{file_date}.xlsx"
+                        st.session_state['count'] = len(final_df)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
 
     if 'zip_data' in st.session_state:
         st.divider()
-        st.success(f"✅ Success! Created {st.session_state.get('count', 0)} multi-sheet workbooks.")
+        st.success(f"✅ Success! Generated {st.session_state.get('count', 0)} records.")
         st.download_button(
             label=f"📥 Download {st.session_state['file_name']}",
             data=st.session_state['zip_data'],
