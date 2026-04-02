@@ -70,15 +70,6 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9.1 | Line Completion Fix")
+    st.caption("v6.9.2 | Syntax Closure Fix")
 
-uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
-
-if uploaded_file:
-    st.divider()
-    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
-
-    selected_files = []
-    if mode == "📦 Bulk Export":
-        st.subheader("Filter Components")
-        options = ["amp", "ampp", "vmp", "vmpp", "vtm",
+uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="
