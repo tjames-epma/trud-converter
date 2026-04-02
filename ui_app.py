@@ -5,23 +5,26 @@ import pandas as pd
 import io
 import re
 
-# 1. Page Configuration - MUST be first
+# 1. Page Config - MUST be first
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
 # --- 2. PASSWORD GATEKEEPER ---
 def check_password():
     if "auth" not in st.secrets:
+        st.sidebar.warning("🔓 Local Mode: No secrets found.")
         return True
+    
     if "password_correct" not in st.session_state:
-        def password_entered():
-            if st.session_state["password_input"] == st.secrets["auth"]["password"]:
+        st.title("🔐 Access Required")
+        pwd = st.text_input("Please enter the access password", type="password")
+        if st.button("Sign In"):
+            if pwd == st.secrets["auth"]["password"]:
                 st.session_state["password_correct"] = True
-                del st.session_state["password_input"]
+                st.rerun()
             else:
-                st.session_state["password_correct"] = False
-        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
+                st.error("Invalid password")
         return False
-    return st.session_state.get("password_correct", False)
+    return True
 
 if not check_password():
     st.stop()
@@ -32,50 +35,37 @@ def get_legacy_sheet_name(tag, filename_lower):
     tag = tag.split('}')[-1]
     if "f_ampp" in filename_lower:
         mapping = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
-                   "CCONTENT": "ContentType", "PRESC_INFO": "PrescInfoType", 
-                   "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
+                   "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
         return mapping.get(tag, tag)
-    if "f_amp" in filename_lower and not "ampp" in filename_lower:
-        mapping = {"AMP": "AmpType", "API": "ApiType", "LIC_ROUTE": "LicRouteType", "APP_PROD_INFO": "AppProdInfoType"}
-        return mapping.get(tag, tag)
-    if "f_vmp" in filename_lower and not "vmpp" in filename_lower:
-        mapping = {"VMP": "VMP", "VPI": "VPI", "ONT_DRUG_FORM": "OntDrugForm",
-                   "DRUG_FORM": "DrugForm", "DRUG_ROUTE": "DrugRoute", "CONTROL_INFO": "Control"}
-        return mapping.get(tag, tag)
-    if "f_vmpp" in filename_lower:
-        mapping = {"VMPP": "VMPP", "DT_INFO": "DtInfo", "CONTENT": "CContent", "CCONTENT": "CContent"}
-        return mapping.get(tag, tag)
-    return tag.replace("InfoType", "").replace("Type", "")
+    return tag.replace("Type", "")
 
-def process_xml_streamed(xml_file, filename_lower):
-    """Memory-safe XML parsing using iterparse."""
+def process_legacy_xml_to_sheets(xml_content, filename_lower):
     try:
         data_map = {}
-        context = ET.iterparse(xml_file, events=("end",))
+        context = ET.iterparse(xml_content, events=("end",))
         for event, elem in context:
             tag_name = elem.tag.split('}')[-1]
             sheet_name = get_legacy_sheet_name(tag_name, filename_lower)
             if len(elem) > 0:
-                child_data = {child.tag.split('}')[-1]: (child.text if child.text is not None else "") for child in elem}
-                if child_data:
-                    if sheet_name not in data_map: data_map[sheet_name] = []
-                    data_map[sheet_name].append(child_data)
-            elem.clear() # Clear memory
-        
+                child_data = {child.tag.split('}')[-1]: (child.text if child.text else "") for child in elem}
+                if sheet_name not in data_map:
+                    data_map[sheet_name] = []
+                data_map[sheet_name].append(child_data)
+            elem.clear()
+
         final_sheets = {}
         for sheet, rows in data_map.items():
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(rows).drop_duplicates()
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
-            df = df.drop_duplicates()
             if len(df.columns) > 1:
                 cols = list(df.columns)
-                preferred = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
-                others = [c for c in cols if c not in preferred]
-                df = df[preferred + others]
-                final_sheets[sheet] = df
+                head = [c for c in ["APPID", "AMPPID", "NM", "ABBREVNM"] if c in cols]
+                rest = [c for c in cols if c not in head]
+                final_sheets[sheet] = df[head + rest]
         return final_sheets
-    except: return {}
+    except:
+        return {}
 
 # --- 4. MAIN UI ---
 st.title("💊 TRUD Data Toolkit")
@@ -83,7 +73,7 @@ st.title("💊 TRUD Data Toolkit")
 uploaded_file = st.file_uploader("Upload TRUD ZIP", type="zip")
 
 if uploaded_file:
-    mode = st.radio("**Select Action:**", ["📦 Bulk Multi-File (Legacy)", "🔗 GTIN Mapper"])
+    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"])
 
     if st.button("🚀 Run Processor", use_container_width=True):
         try:
@@ -91,65 +81,37 @@ if uploaded_file:
                 all_names = outer_zip.namelist()
                 buf = io.BytesIO()
                 
-                if mode == "📦 Bulk Multi-File (Legacy)":
+                if mode == "📦 Bulk Export":
                     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                         xml_worklist = []
                         for f in all_names:
-                            if f.lower().endswith('.xml'): xml_worklist.append((f, outer_zip.open(f)))
+                            if f.lower().endswith('.xml'):
+                                xml_worklist.append((f, outer_zip.open(f)))
                             elif f.lower().endswith('.zip'):
-                                with outer_zip.open(f) as zd:
-                                    with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                                        for iname in iz.namelist():
-                                            if iname.endswith('.xml'): xml_worklist.append((iname, io.BytesIO(iz.read(iname))))
-                        
+                                with outer_zip.open(f) as zd_inner:
+                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
+                                        for iname in iz_inner.namelist():
+                                            if iname.endswith('.xml'):
+                                                xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
+
                         for name, data in xml_worklist:
-                            sheets = process_xml_streamed(data, name.lower())
+                            sheets = process_legacy_xml_to_sheets(data, name.lower())
                             if sheets:
-                                ex_buf = io.BytesIO()
-                                with pd.ExcelWriter(ex_buf, engine='openpyxl') as writer:
+                                xl_buf = io.BytesIO()
+                                with pd.ExcelWriter(xl_buf) as writer:
                                     for s_name, s_df in sheets.items():
                                         s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
                                 clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]) + ".xlsx"
-                                zout.writestr(clean_fn, ex_buf.getvalue())
+                                zout.writestr(clean_fn, xl_buf.getvalue())
                     
-                    st.session_state['out_data'] = buf.getvalue()
-                    st.session_state['out_name'] = "TRUD_Export.zip"
-
-                else: # GTIN Mapper
+                    st.session_state['zip_data'] = buf.getvalue()
+                    st.session_state['file_name'] = "TRUD_Export.zip"
+                
+                elif mode == "🔗 GTIN Mapper":
+                    status_text = st.empty()
+                    progress_bar = st.progress(0)
+                    
+                    status_text.text("Step 1/3: Reading AMPP Data...")
                     ampp_f = [f for f in all_names if 'f_ampp2' in f.lower()][0]
-                    gtin_z = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                    
-                    # Stream AMPP
                     ampp_rows = []
                     for ev, el in ET.iterparse(outer_zip.open(ampp_f), events=("end",)):
-                        if el.tag.split('}')[-1] == 'AMPP':
-                            ampp_rows.append({c.tag.split('}')[-1]: c.text for c in el})
-                        el.clear()
-                    df_ampp = pd.DataFrame(ampp_rows)
-                    id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
-                    
-                    # Stream GTIN
-                    g_rows = []
-                    with outer_zip.open(gtin_z) as zd:
-                        with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                            g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
-                            for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
-                                if el.tag.split('}')[-1] == 'AMPP':
-                                    id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID")
-                                    if id_el is not None:
-                                        for gd in el.findall(".//{*}GTINDATA"):
-                                            gtin = gd.find(".//{*}GTIN")
-                                            if gtin is not None: g_rows.append({'JOIN_ID': id_el.text, 'GTIN': gtin.text})
-                                el.clear()
-                    
-                    final = pd.merge(df_ampp, pd.DataFrame(g_rows), left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
-                    ex_buf = io.BytesIO()
-                    with pd.ExcelWriter(ex_buf) as writer: final.to_excel(writer, index=False)
-                    st.session_state['out_data'] = ex_buf.getvalue()
-                    st.session_state['out_name'] = "GTIN_Mapped.xlsx"
-
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-
-if 'out_data' in st.session_state:
-    st.download_button("📥 Download Results", data=st.session_state['out_data'], file_name=st.session_state['out_name'], use_container_width=True)
