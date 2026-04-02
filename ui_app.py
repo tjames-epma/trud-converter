@@ -69,7 +69,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.4 | Filters & Progress Build")
+    st.caption("v6.5 | GTIN Join Fix")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
@@ -97,7 +97,6 @@ if uploaded_file:
                         xml_worklist = []
                         for f in all_names:
                             fn_l = f.lower()
-                            # Apply the file filters
                             if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
                                 xml_worklist.append((f, outer_zip.open(f)))
                             elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
@@ -147,26 +146,44 @@ if uploaded_file:
                             g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
                             for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
                                 if el.tag.split('}')[-1] == 'AMPP':
-                                    id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID")
-                                    if id_el is not None:
+                                    # Search for ID in any namespace
+                                    id_el = el.find(".//{*}AMPPID")
+                                    if id_el is None: id_el = el.find(".//{*}APPID")
+                                    
+                                    if id_el is not None and id_el.text:
+                                        id_val = id_el.text
                                         for gd in el.findall(".//{*}GTINDATA"):
                                             gtin = gd.find(".//{*}GTIN")
-                                            if gtin is not None: 
-                                                g_rows.append({'JOIN_ID': id_el.text, 'GTIN': gtin.text})
+                                            if gtin is not None and gtin.text: 
+                                                g_rows.append({'JOIN_ID': id_val, 'GTIN': gtin.text})
                                 el.clear()
+                    
                     df_gtin = pd.DataFrame(g_rows)
                     progress_bar.progress(66)
                     
                     status_text.text("Step 3/3: Merging & Generating Excel...")
+                    
+                    # Safety check: if no GTINs found, create empty DF with JOIN_ID to prevent crash
+                    if df_gtin.empty:
+                        df_gtin = pd.DataFrame(columns=['JOIN_ID', 'GTIN'])
+                        st.warning("⚠️ No GTIN records were found in the uploaded file.")
+
                     id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
-                    final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
                     
-                    xl_buf = io.BytesIO()
-                    with pd.ExcelWriter(xl_buf) as writer:
-                        final.to_excel(writer, index=False)
+                    if id_col and not df_ampp.empty:
+                        final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
+                        if 'JOIN_ID' in final.columns:
+                            final = final.drop(columns=['JOIN_ID'])
+                        
+                        xl_buf = io.BytesIO()
+                        with pd.ExcelWriter(xl_buf) as writer:
+                            final.to_excel(writer, index=False)
+                        
+                        st.session_state['zip_data'] = xl_buf.getvalue()
+                        st.session_state['file_name'] = "GTIN_Mapped_Export.xlsx"
+                    else:
+                        st.error("Could not find matching ID columns (AMPPID/APPID) in the files.")
                     
-                    st.session_state['zip_data'] = xl_buf.getvalue()
-                    st.session_state['file_name'] = "GTIN_Mapped_Export.xlsx"
                     progress_bar.progress(100)
                     status_text.empty()
                     progress_bar.empty()
