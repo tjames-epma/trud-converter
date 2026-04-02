@@ -47,7 +47,6 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            # Force ABBREVNM logic
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
             
@@ -70,123 +69,10 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.6 | Clean Character Build")
+    st.caption("v6.7 | Join Persistence Fix")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
 if uploaded_file:
     st.divider()
-    mode = st.radio("**Select Action:**", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
-
-    selected_files = []
-    if mode == "📦 Bulk Export":
-        st.subheader("Filter Components")
-        options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        selected_files = st.multiselect("Select components to include:", options, default=options)
-
-    if st.button("🚀 Run Processor", use_container_width=True):
-        try:
-            with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
-                all_names = outer_zip.namelist()
-                buf = io.BytesIO()
-                
-                if mode == "📦 Bulk Export":
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        xml_worklist = []
-                        for f in all_names:
-                            fn_l = f.lower()
-                            if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                xml_worklist.append((f, outer_zip.open(f)))
-                            elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
-                                with outer_zip.open(f) as zd_inner:
-                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
-                                        for iname in iz_inner.namelist():
-                                            if iname.endswith('.xml'):
-                                                xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
-
-                        total_files = len(xml_worklist)
-                        for i, (name, data) in enumerate(xml_worklist):
-                            status_text.text(f"Processing {i+1} of {total_files}: {name}")
-                            sheets = process_legacy_xml_to_sheets(data, name.lower())
-                            if sheets:
-                                xl_buf = io.BytesIO()
-                                with pd.ExcelWriter(xl_buf) as writer:
-                                    for s_name, s_df in sheets.items():
-                                        s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
-                                clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]).strip('_') + ".xlsx"
-                                zout.writestr(clean_fn, xl_buf.getvalue())
-                            progress_bar.progress((i + 1) / total_files)
-                    
-                    st.session_state['zip_data'] = buf.getvalue()
-                    st.session_state['file_name'] = "TRUD_Bulk_Export.zip"
-                    status_text.empty()
-                    progress_bar.empty()
-                
-                elif mode == "🔗 GTIN Mapper":
-                    status_text = st.empty()
-                    progress_bar = st.progress(0)
-                    
-                    status_text.text("Step 1/3: Reading AMPP Data...")
-                    ampp_f = [f for f in all_names if 'f_ampp2' in f.lower()][0]
-                    ampp_rows = []
-                    for ev, el in ET.iterparse(outer_zip.open(ampp_f), events=("end",)):
-                        if el.tag.split('}')[-1] == 'AMPP':
-                            ampp_rows.append({c.tag.split('}')[-1]: (c.text if c.text else "") for c in el})
-                        el.clear()
-                    df_ampp = pd.DataFrame(ampp_rows)
-                    progress_bar.progress(33)
-                    
-                    status_text.text("Step 2/3: Reading GTIN Data...")
-                    gtin_z = [f for f in all_names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                    g_rows = []
-                    with outer_zip.open(gtin_z) as zd:
-                        with zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                            g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
-                            for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
-                                if el.tag.split('}')[-1] == 'AMPP':
-                                    id_el = el.find(".//{*}AMPPID")
-                                    if id_el is None: id_el = el.find(".//{*}APPID")
-                                    if id_el is not None and id_el.text:
-                                        id_val = id_el.text
-                                        for gd in el.findall(".//{*}GTINDATA"):
-                                            gtin = gd.find(".//{*}GTIN")
-                                            if gtin is not None and gtin.text: 
-                                                g_rows.append({'JOIN_ID': id_val, 'GTIN': gtin.text})
-                                el.clear()
-                    df_gtin = pd.DataFrame(g_rows)
-                    progress_bar.progress(66)
-                    
-                    status_text.text("Step 3/3: Merging & Generating Excel...")
-                    if df_gtin.empty:
-                        st.warning("⚠️ No GTIN records found.")
-                    
-                    id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
-                    if id_col:
-                        final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
-                        if 'JOIN_ID' in final.columns: final = final.drop(columns=['JOIN_ID'])
-                        
-                        xl_buf = io.BytesIO()
-                        with pd.ExcelWriter(xl_buf) as writer:
-                            final.to_excel(writer, index=False)
-                        
-                        st.session_state['zip_data'] = xl_buf.getvalue()
-                        st.session_state['file_name'] = "GTIN_Mapped_Export.xlsx"
-                    
-                    progress_bar.progress(100)
-                    status_text.empty()
-                    progress_bar.empty()
-
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-
-if 'zip_data' in st.session_state:
-    st.divider()
-    st.download_button(
-        label=f"📥 Download {st.session_state['file_name']}",
-        data=st.session_state['zip_data'],
-        file_name=st.session_state['file_name'],
-        use_container_width=True
-    )
+    mode = st
