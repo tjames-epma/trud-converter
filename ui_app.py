@@ -87,4 +87,42 @@ if uploaded_file:
                                 with pd.ExcelWriter(xl_b) as wr:
                                     for sn, sdf in sheets.items(): sdf.to_excel(wr, index=False, sheet_name=sn[:31])
                                 zout.writestr(re.sub(r'\d+', '', n.split('/')[-1].split('.')[0]).strip('_') + ".xlsx", xl_b.getvalue())
-                            pb.
+                            pb.progress((i + 1) / len(work))
+                    st.session_state.zip_data, st.session_state.file_name = buf.getvalue(), "TRUD_Bulk.zip"
+
+                elif mode == "🔗 GTIN Mapper":
+                    txt.text("1/3: Reading AMPP..."); ampp_f = [f for f in names if 'f_ampp2' in f.lower()][0]
+                    rows = []
+                    for ev, el in ET.iterparse(outer.open(ampp_f), events=("end",)):
+                        if el.tag.split('}')[-1] == 'AMPP': rows.append({c.tag.split('}')[-1]: (c.text or "") for c in el})
+                        el.clear()
+                    df_ampp = pd.DataFrame(rows); pb.progress(33)
+                    
+                    txt.text("2/3: Reading GTIN..."); gtin_z = [f for f in names if 'gtin' in f.lower() and f.endswith('.zip')][0]
+                    g_rows = []
+                    with outer.open(gtin_z) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
+                        g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
+                        for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
+                            if el.tag.split('}')[-1] == 'AMPP':
+                                id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID")
+                                if id_el is not None and id_el.text:
+                                    for gd in el.findall(".//{*}GTINDATA"):
+                                        gtin = gd.find(".//{*}GTIN")
+                                        if gtin is not None and gtin.text: g_rows.append({'JOIN_ID': id_el.text, 'GTIN': gtin.text})
+                            el.clear()
+                    df_gtin = pd.DataFrame(g_rows) if g_rows else pd.DataFrame(columns=['JOIN_ID', 'GTIN']); pb.progress(66)
+                    
+                    txt.text("3/3: Merging..."); id_col = next((c for c in ['AMPPID', 'APPID'] if c in df_ampp.columns), None)
+                    if id_col:
+                        final = pd.merge(df_ampp, df_gtin, left_on=id_col, right_on='JOIN_ID', how='left').dropna(subset=['GTIN'])
+                        if 'JOIN_ID' in final.columns: final = final.drop(columns=['JOIN_ID'])
+                        xl_b = io.BytesIO()
+                        with pd.ExcelWriter(xl_b) as wr: final.to_excel(wr, index=False)
+                        st.session_state.zip_data, st.session_state.file_name = xl_b.getvalue(), "GTIN_Mapped.xlsx"
+                    pb.progress(100)
+                txt.empty(); pb.empty()
+        except Exception as e: st.error(f"❌ Error: {e}")
+
+if 'zip_data' in st.session_state:
+    st.divider()
+    st.download_button(f"📥 Download {st.session_state.file_name}", st.session_state.zip_data, st.session_state.file_name, use_container_width=True)
