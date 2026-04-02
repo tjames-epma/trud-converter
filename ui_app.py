@@ -18,7 +18,7 @@ if "password_correct" not in st.session_state:
             st.rerun()
         else:
             st.error("Invalid password")
-    st.stop() # Stops everything else from loading until logged in
+    st.stop()
 
 # --- 3. LOGIC FUNCTIONS ---
 
@@ -47,6 +47,25 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
+            # FORCE ABBREVNM COLUMN
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
+            
             if len(df.columns) > 1:
+                # FIXED: Added the missing indented block here
+                cols = list(df.columns)
+                head = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
+                rest = [c for c in cols if c not in head]
+                final_sheets[sheet] = df[head + rest]
+        return final_sheets
+    except:
+        return {}
+
+# --- 4. THE APP ---
+
+st.title("💊 TRUD Data Toolkit")
+
+with st.sidebar:
+    st.caption("v6.2 | Indent Fix")
+    if st.button("Logout"):
+        del st.session_
