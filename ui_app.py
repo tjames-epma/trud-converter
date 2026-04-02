@@ -3,141 +3,171 @@ import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
-import re
-
-# 1. Page Config
-st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
-
-# --- 2. THE GATEKEEPER ---
-if "password_correct" not in st.session_state:
-    st.title("🔐 Access Required")
-    pwd = st.text_input("Please enter password", type="password")
-    if st.button("Sign In"):
-        if "auth" in st.secrets and pwd == st.secrets["auth"]["password"]:
+import re  # Needed for smart date extraction
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
+ 
+# 1. MUST BE FIRST: Page Configuration
+st.set_page_config(page_title="TRUD XML Converter", page_icon="💊", layout="wide")
+ 
+# --- 2. PASSWORD GATEKEEPER ---
+def check_password():
+    if "auth" not in st.secrets:
+        st.error("Secrets not configured. Please add [auth] section to Streamlit Secrets.")
+        return False
+ 
+    def password_entered():
+        if st.session_state["password_input"] == st.secrets["auth"]["password"]:
             st.session_state["password_correct"] = True
-            st.rerun()
-        else: st.error("Invalid password")
+            del st.session_state["password_input"]
+        else:
+            st.session_state["password_correct"] = False
+ 
+    if "password_correct" not in st.session_state:
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        return True
+ 
+if not check_password():
     st.stop()
-
+ 
 # --- 3. LOGIC FUNCTIONS ---
-def get_legacy_sheet_name(tag, fn):
-    tag = tag.split('}')[-1]
-    if "f_ampp" in fn:
-        m = {"AMPP": "AmppType", "PACK_INFO": "PackInfoType", "CONTENT": "ContentType", 
-             "PRESC_INFO": "PrescInfoType", "PRICE_INFO": "PriceInfoType", "REIMB_INFO": "ReimbInfoType"}
-        return m.get(tag, tag)
-    return tag.replace("Type", "")
-
-def process_xml(xml_content, fn):
-    try:
-        data_map = {}
-        for ev, elem in ET.iterparse(xml_content, events=("end",)):
-            tag = elem.tag.split('}')[-1]
-            sheet = get_legacy_sheet_name(tag, fn)
-            if len(elem) > 0:
-                child_data = {c.tag.split('}')[-1]: (c.text or "") for c in elem}
-                if sheet not in data_map: data_map[sheet] = []
-                data_map[sheet].append(child_data)
-            elem.clear()
-        final = {}
-        for s, rows in data_map.items():
-            df = pd.DataFrame(rows).drop_duplicates()
-            if s in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns: df["ABBREVNM"] = ""
-            if len(df.columns) > 1:
-                cols = list(df.columns)
-                head = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
-                final[s] = df[head + [c for c in cols if c not in head]]
-        return final
-    except: return {}
-
-# --- 4. MAIN UI ---
-st.title("💊 TRUD Data Toolkit")
+ 
+def get_ampp_data(zip_obj, file_pattern):
+    matches = [f for f in zip_obj.namelist() if file_pattern in f.lower() and f.endswith('.xml')]
+    if not matches: return pd.DataFrame()
+    with zip_obj.open(matches[0]) as f:
+        tree = ET.parse(f)
+        root = tree.getroot()
+        rows = []
+        for record in root.findall(".//{*}AMPP"):
+            entry = {child.tag.split('}')[-1]: child.text for child in record if child.text}
+            rows.append(entry)
+        return pd.DataFrame(rows)
+ 
+def get_gtin_mapping(zip_obj):
+    xml_files = [f for f in zip_obj.namelist() if f.endswith('.xml')]
+    if not xml_files: return pd.DataFrame()
+    with zip_obj.open(xml_files[0]) as f:
+        tree = ET.parse(f)
+        root = tree.getroot()
+        rows = []
+        for ampp_block in root.findall(".//{*}AMPP"):
+            amppid_elem = ampp_block.find("{*}AMPPID")
+            amppid = amppid_elem.text if amppid_elem is not None else None
+            for gtin_data in ampp_block.findall(".//{*}GTINDATA"):
+                gtin_elem = gtin_data.find("{*}GTIN")
+                if gtin_elem is not None and amppid:
+                    rows.append({'AMPPID': amppid, 'GTIN': gtin_elem.text})
+        return pd.DataFrame(rows)
+ 
+# --- 4. USER INTERFACE ---
+ 
 with st.sidebar:
-    if st.button("Reset App"):
-        st.session_state.clear()
-        st.rerun()
-    st.caption("v7.0 | Double-Look Join")
-
-uploaded_file = st.file_uploader("📤 Drop TRUD ZIP here", type="zip")
-
-if uploaded_file:
-    mode = st.radio("Action", ["📦 Bulk Export", "🔗 GTIN Mapper"], horizontal=True)
-    sel = st.multiselect("Filters", ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "lookup"], default=["amp", "ampp", "vmp", "vmpp", "vtm"]) if mode == "📦 Bulk Export" else []
-
-    if st.button("🚀 Run Processor", use_container_width=True):
-        try:
-            with zipfile.ZipFile(uploaded_file, 'r') as outer:
-                names = outer.namelist(); buf = io.BytesIO()
-                pb = st.progress(0); txt = st.empty()
-                
-                if mode == "📦 Bulk Export":
-                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        work = []
-                        for f in names:
-                            if any(f"f_{o}" in f.lower() for o in sel) and f.endswith('.xml'): work.append((f, outer.open(f)))
-                            elif f.lower().endswith('.zip') and any(o in f.lower() for o in sel):
-                                with outer.open(f) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                                    for i in iz.namelist():
-                                        if i.endswith('.xml'): work.append((i, io.BytesIO(iz.read(i))))
-                        for i, (n, d) in enumerate(work):
-                            txt.text(f"File {i+1}/{len(work)}: {n}")
-                            sheets = process_xml(d, n.lower())
-                            if sheets:
-                                xl_b = io.BytesIO()
-                                with pd.ExcelWriter(xl_b) as wr:
-                                    for sn, sdf in sheets.items(): sdf.to_excel(wr, index=False, sheet_name=sn[:31])
-                                zout.writestr(re.sub(r'\d+', '', n.split('/')[-1].split('.')[0]).strip('_') + ".xlsx", xl_b.getvalue())
-                            pb.progress((i + 1) / len(work))
-                    st.session_state.zip_data, st.session_state.file_name = buf.getvalue(), "TRUD_Bulk.zip"
-
-                elif mode == "🔗 GTIN Mapper":
-                    txt.text("1/3: Reading AMPP..."); ampp_f = [f for f in names if 'f_ampp2' in f.lower()][0]
-                    rows = []
-                    for ev, el in ET.iterparse(outer.open(ampp_f), events=("end",)):
-                        if el.tag.split('}')[-1] == 'AMPP': rows.append({c.tag.split('}')[-1]: (c.text or "") for c in el})
-                        el.clear()
-                    df_ampp = pd.DataFrame(rows); pb.progress(33)
-                    
-                    txt.text("2/3: Reading GTIN..."); gtin_z = [f for f in names if 'gtin' in f.lower() and f.endswith('.zip')][0]
-                    g_rows = []
-                    with outer.open(gtin_z) as zd, zipfile.ZipFile(io.BytesIO(zd.read())) as iz:
-                        g_xml = [f for f in iz.namelist() if f.endswith('.xml')][0]
-                        for ev, el in ET.iterparse(iz.open(g_xml), events=("end",)):
-                            # Check for both AMPP and APP level tags
-                            tag_type = el.tag.split('}')[-1]
-                            if tag_type in ['AMPP', 'APP']:
-                                id_el = el.find(".//{*}AMPPID") or el.find(".//{*}APPID") or el.find(".//{*}ID")
-                                if id_el is not None and id_el.text:
-                                    for gd in el.findall(".//{*}GTINDATA"):
-                                        gtin = gd.find(".//{*}GTIN")
-                                        if gtin is not None and gtin.text: 
-                                            g_rows.append({'JOIN_ID': str(id_el.text), 'GTIN': str(gtin.text)})
-                            el.clear()
-                    df_gtin = pd.DataFrame(g_rows).drop_duplicates() if g_rows else pd.DataFrame(columns=['JOIN_ID', 'GTIN']); pb.progress(66)
-                    
-                    txt.text("3/3: Performing Double-Look Join..."); 
-                    # Try AMPPID first
-                    final = pd.DataFrame()
-                    if 'AMPPID' in df_ampp.columns:
-                        df_ampp['AMPPID'] = df_ampp['AMPPID'].astype(str)
-                        final = pd.merge(df_ampp, df_gtin, left_on='AMPPID', right_on='JOIN_ID', how='inner')
-                    
-                    # If empty, try APPID
-                    if final.empty and 'APPID' in df_ampp.columns:
-                        df_ampp['APPID'] = df_ampp['APPID'].astype(str)
-                        final = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='JOIN_ID', how='inner')
-                    
-                    if not final.empty:
-                        if 'JOIN_ID' in final.columns: final = final.drop(columns=['JOIN_ID'])
-                        xl_b = io.BytesIO()
-                        with pd.ExcelWriter(xl_b) as wr: final.to_excel(wr, index=False)
-                        st.session_state.zip_data, st.session_state.file_name = xl_b.getvalue(), "GTIN_Mapped.xlsx"
-                    else:
-                        st.warning("No matches found. This dm+d release may not contain GTIN mappings for the selected AMPP file.")
-                    pb.progress(100)
-                txt.empty(); pb.empty()
-        except Exception as e: st.error(f"❌ Error: {e}")
-
-if 'zip_data' in st.session_state:
+    st.title("Settings & Info")
+    st.info("Mapping TRUD AMPP records to GTINs.")
     st.divider()
-    st.download_button(f"📥 Download {st.session_state.file_name}", st.session_state.zip_data, st.session_state.file_name, use_container_width=True)
+    st.subheader("🔍 Quick GTIN Lookup")
+    lookup_id = st.text_input("Enter APPID/AMPPID to find GTIN", help="Search the memory for a specific ID barcode.")
+    st.divider()
+    st.caption("v1.5 | Built for EPMA Data Team")
+ 
+st.title("💊 TRUD AMPP + GTIN Processor")
+st.markdown("---")
+ 
+col1, col2 = st.columns([2, 1])
+ 
+with col1:
+    st.subheader("1. Data Upload")
+    uploaded_file = st.file_uploader("Upload the main TRUD ZIP file", type="zip")
+ 
+with col2:
+    st.subheader("2. Summary")
+    # Initialize week_num with a fallback
+    week_num = "Processed" 
+    if uploaded_file:
+        st.write(f"**Filename:** `{uploaded_file.name}`")
+        # Check for the specific DM+D filename format
+        if uploaded_file.name.lower().startswith("nhsbsa_dmd_1"):
+            # Regex extracts the 8 digits (YYYYMMDD) that follow an underscore
+            date_match = re.search(r'_(\d{8})', uploaded_file.name)
+            if date_match:
+                week_num = date_match.group(1)
+                st.warning(f"📅 **Data Date Identified:** {week_num}")
+            else:
+                st.info("📂 Valid dm+d format, but date extraction failed.")
+        elif 'week' in uploaded_file.name.lower():
+            week_num = uploaded_file.name.lower().split('-')[0].replace('week', '')
+            st.warning(f"📅 **Data Week Identified:** {week_num}")
+    else:
+        st.write("Awaiting file...")
+ 
+if uploaded_file is not None:
+    if st.button("🚀 Process Data & Create Table", use_container_width=True):
+        with st.status("Processing Layers...", expanded=True) as status:
+            try:
+                with zipfile.ZipFile(uploaded_file, 'r') as outer_zip:
+                    st.write("Reading AMPP file...")
+                    df_ampp = get_ampp_data(outer_zip, 'f_ampp2')
+                    gtin_zip_list = [f for f in outer_zip.namelist() if 'gtin' in f.lower()]
+                    if not gtin_zip_list:
+                        st.error("Could not find internal GTIN zip.")
+                    else:
+                        st.write("Reading GTIN file...")
+                        with outer_zip.open(gtin_zip_list[0]) as inner_data:
+                            with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
+                                df_gtin = get_gtin_mapping(inner_zip)
+ 
+                        # Merge Logic
+                        st.write("Merging records...")
+                        final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
+                        total_ampps = len(final_df)
+                        gtin_matches = final_df['GTIN'].notna().sum()
+                        match_rate = gtin_matches / total_ampps if total_ampps > 0 else 0
+                        export_df = final_df.dropna(subset=['GTIN']).copy()
+                        if 'AMPPID' in export_df.columns:
+                            export_df = export_df.drop(columns=['AMPPID'])
+ 
+                        # Sidebar Metrics
+                        with st.sidebar:
+                            st.subheader("📊 Data Quality")
+                            st.metric("Total AMPPs", f"{total_ampps:,}")
+                            st.metric("GTIN Matches", f"{gtin_matches:,}", delta=f"{match_rate:.1%}")
+                            st.progress(match_rate, text="Barcode Coverage")
+                            if lookup_id:
+                                search_res = final_df[final_df['APPID'] == lookup_id]
+                                if not search_res.empty and pd.notna(search_res.iloc[0]['GTIN']):
+                                    st.success(f"**GTIN:** {search_res.iloc[0]['GTIN']}")
+                                else:
+                                    st.error("GTIN not found for this ID.")
+ 
+                        # Excel Table Generation
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            sheet_name = 'GTIN_Data'
+                            export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+                            worksheet = writer.sheets[sheet_name]
+                            num_rows, num_cols = export_df.shape
+                            last_col = get_column_letter(num_cols)
+                            tab = Table(displayName="TRUD_Data_Table", ref=f"A1:{last_col}{num_rows + 1}")
+                            style = TableStyleInfo(name="TableStyleLight9", showRowStripes=True)
+                            tab.tableStyleInfo = style
+                            worksheet.add_table(tab)
+                            for i, col in enumerate(export_df.columns):
+                                worksheet.column_dimensions[get_column_letter(i+1)].width = 20
+ 
+                        processed_data = output.getvalue()
+                        status.update(label="Conversion Complete!", state="complete", expanded=False)
+                        st.balloons()
+                        st.download_button(
+                            label="📥 Download Power Query Ready Excel",
+                            data=processed_data,
+                            file_name=f"TRUD_GTIN_Export_{week_num}.xlsx"
+                        )
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
