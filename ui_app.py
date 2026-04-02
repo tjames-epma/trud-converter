@@ -5,7 +5,7 @@ import pandas as pd
 import io
 import re
 
-# 1. Page Config - Must be absolute first
+# 1. Page Config
 st.set_page_config(page_title="TRUD Data Toolkit", page_icon="💊", layout="wide")
 
 # --- 2. THE GATEKEEPER ---
@@ -39,26 +39,22 @@ def process_legacy_xml_to_sheets(xml_content, filename_lower):
             sheet_name = get_legacy_sheet_name(tag_name, filename_lower)
             if len(elem) > 0:
                 child_data = {child.tag.split('}')[-1]: (child.text if child.text else "") for child in elem}
-                if sheet_name not in data_map:
-                    data_map[sheet_name] = []
+                if sheet_name not in data_map: data_map[sheet_name] = []
                 data_map[sheet_name].append(child_data)
             elem.clear()
 
         final_sheets = {}
         for sheet, rows in data_map.items():
             df = pd.DataFrame(rows).drop_duplicates()
-            # Mandatory ABBREVNM Column Fix
             if sheet in ["AmppType", "VMP", "VTM"] and "ABBREVNM" not in df.columns:
                 df["ABBREVNM"] = ""
-            
             if len(df.columns) > 1:
                 cols = list(df.columns)
                 head = [c for c in ["APPID", "AMPPID", "VMPID", "VTMID", "NM", "ABBREVNM"] if c in cols]
                 rest = [c for c in cols if c not in head]
                 final_sheets[sheet] = df[head + rest]
         return final_sheets
-    except:
-        return {}
+    except: return {}
 
 # --- 4. MAIN UI ---
 
@@ -70,7 +66,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
     st.divider()
-    st.caption("v6.9.6 | Colon Restoration")
+    st.caption("v6.9.7 | Structural Fix")
 
 uploaded_file = st.file_uploader("📤 Drop TRUD ZIP file here", type="zip")
 
@@ -82,7 +78,7 @@ if uploaded_file:
     if mode == "📦 Bulk Export":
         st.subheader("Filter Components")
         options = ["amp", "ampp", "vmp", "vmpp", "vtm", "gtin", "ingredient", "lookup"]
-        selected_files = st.multiselect("Select components to include:", options, default=options)
+        selected_files = st.multiselect("Select components:", options, default=options)
     
     if st.button("🚀 Run Processor", use_container_width=True):
         try:
@@ -91,45 +87,13 @@ if uploaded_file:
                 buf = io.BytesIO()
                 
                 if mode == "📦 Bulk Export":
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
+                    pb = st.progress(0); st_txt = st.empty()
                     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        xml_worklist = []
+                        xml_work = []
                         for f in all_names:
                             fn_l = f.lower()
                             if any(f"f_{o}" in fn_l for o in selected_files) and f.endswith('.xml'):
-                                xml_worklist.append((f, outer_zip.open(f)))
+                                xml_work.append((f, outer_zip.open(f)))
                             elif fn_l.endswith('.zip') and any(o in fn_l for o in selected_files):
-                                with outer_zip.open(f) as zd_inner:
-                                    with zipfile.ZipFile(io.BytesIO(zd_inner.read())) as iz_inner:
-                                        for iname in iz_inner.namelist():
-                                            if iname.endswith('.xml'):
-                                                xml_worklist.append((iname, io.BytesIO(iz_inner.read(iname))))
-
-                        total_files = len(xml_worklist)
-                        if total_files > 0:
-                            for i, (name, data) in enumerate(xml_worklist):
-                                status_text.text(f"Processing {i+1} of {total_files}: {name}")
-                                sheets = process_legacy_xml_to_sheets(data, name.lower())
-                                # FIXED: Added colon and completed the block
-                                if sheets:
-                                    xl_buf = io.BytesIO()
-                                    with pd.ExcelWriter(xl_buf) as writer:
-                                        for s_name, s_df in sheets.items():
-                                            s_df.to_excel(writer, index=False, sheet_name=s_name[:31])
-                                    clean_fn = re.sub(r'\d+', '', name.split('/')[-1].split('.')[0]).strip('_') + ".xlsx"
-                                    zout.writestr(clean_fn, xl_buf.getvalue())
-                                progress_bar.progress((i + 1) / total_files)
-                    
-                    st.session_state['zip_data'] = buf.getvalue()
-                    st.session_state['file_name'] = "TRUD_Bulk_Export.zip"
-                    status_text.empty()
-                    progress_bar.empty()
-                
-                elif mode == "🔗 GTIN Mapper":
-                    status_text = st.empty()
-                    progress_bar = st.progress(0)
-                    
-                    status_text.text("Step 1/3: Reading AMPP Data...")
-                    ampp
+                                with outer_zip.open(f) as zd:
+                                    with zip
