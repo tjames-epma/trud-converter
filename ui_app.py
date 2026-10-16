@@ -128,4 +128,53 @@ if uploaded_file is not None:
                             with zipfile.ZipFile(io.BytesIO(inner_data.read())) as inner_zip:
                                 df_gtin = get_gtin_mapping(inner_zip)
 
-                        # Merge 
+                        # Merge Logic
+                        st.write("Merging records...")
+                        final_df = pd.merge(df_ampp, df_gtin, left_on='APPID', right_on='AMPPID', how='left')
+                        total_ampps = len(final_df)
+                        gtin_matches = final_df['GTIN'].notna().sum()
+                        match_rate = gtin_matches / total_ampps if total_ampps > 0 else 0
+                        export_df = final_df.dropna(subset=['GTIN']).copy()
+                        if 'AMPPID' in export_df.columns:
+                            export_df = export_df.drop(columns=['AMPPID'])
+                        startdt = export_df.pop('STARTDT')
+                        export_df.insert(export_df.columns.get_loc('DISCCD'), 'STARTDT', startdt)
+
+                        # Sidebar Metrics
+                        with st.sidebar:
+                            st.subheader("📊 Data Quality")
+                            st.metric("Total AMPPs", f"{total_ampps:,}")
+                            st.metric("GTIN Matches", f"{gtin_matches:,}", delta=f"{match_rate:.1%}")
+                            st.progress(match_rate, text="Barcode Coverage")
+                            if lookup_id:
+                                search_res = final_df[final_df['APPID'] == lookup_id]
+                                if not search_res.empty and pd.notna(search_res.iloc[0]['GTIN']):
+                                    st.success(f"**GTIN:** {search_res.iloc[0]['GTIN']}")
+                                else:
+                                    st.error("GTIN not found for this ID.")
+
+                        # Excel Table Generation
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            sheet_name = 'GTIN_Data'
+                            export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+                            worksheet = writer.sheets[sheet_name]
+                            num_rows, num_cols = export_df.shape
+                            last_col = get_column_letter(num_cols)
+                            tab = Table(displayName="TRUD_Data_Table", ref=f"A1:{last_col}{num_rows + 1}")
+                            style = TableStyleInfo(name="TableStyleLight9", showRowStripes=True)
+                            tab.tableStyleInfo = style
+                            worksheet.add_table(tab)
+                            for i, col in enumerate(export_df.columns):
+                                worksheet.column_dimensions[get_column_letter(i+1)].width = 20
+
+                        processed_data = output.getvalue()
+                        status.update(label="Conversion Complete!", state="complete", expanded=False)
+                        st.balloons()
+                        st.download_button(
+                            label="📥 Download Power Query Ready Excel",
+                            data=processed_data,
+                            file_name=f"GTIN_building.xlsx"
+                        )
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
