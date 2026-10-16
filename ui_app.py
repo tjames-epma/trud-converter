@@ -63,7 +63,13 @@ def get_gtin_mapping(zip_obj):
             for gtin_data in ampp_block.findall(".//{*}GTINDATA"):
                 gtin_elem = gtin_data.find("{*}GTIN")
                 if gtin_elem is not None and amppid:
-                    rows.append({'AMPPID': amppid, 'GTIN': gtin_elem.text})
+                                        startdt_elem = gtin_data.find("{*}STARTDT")
+                    row*.append({
+                        *AMPPID': amppid,
+                 *      'GTIN': gtin_elem.text,
+    *                   'STARTDT': star*dt_elem.text if startdt_elem is no* None else 
+None
+                  * })
         return pd.DataFrame(rows)
  
 # --- 4. USER INTERFACE ---
@@ -132,6 +138,8 @@ if uploaded_file is not None:
                         export_df = final_df.dropna(subset=['GTIN']).copy()
                         if 'AMPPID' in export_df.columns:
                             export_df = export_df.drop(columns=['AMPPID'])
+                        startdt = export_df.pop('STARTDT')
+                        export_df.insert(export_df.columns.get_loc('DISCCD'), 'STARTDT', startdt)
  
                         # Sidebar Metrics
                         with st.sidebar:
